@@ -2007,6 +2007,7 @@ var oncall = {
     },
     init: function(){
       Handlebars.registerPartial('settings-subheader', this.data.settingsSubheaderTemplate);
+      oncall.getModes();
       this.getData();
     },
     events: function(){
@@ -2021,6 +2022,23 @@ var oncall = {
       }
     },
     renderPage: function(data){
+      $.when(
+        oncall.data.modesPromise
+      ).done(function() {
+        let contactModes = [];
+
+        for(let key in data.contacts)
+        {
+          let currentMode = oncall.data.modes.find(x => x.name === key);
+          contactModes.push({
+            label: currentMode.label,
+            mode: key,
+            value: data.contacts[key]
+          });
+        }
+        data.contactmodes = contactModes;
+        data.telmodes = ["call", "sms"];
+      });
       var template = Handlebars.compile(this.data.pageSource),
            self = this;
       oncall.data.timezonesPromise.done(function() {
@@ -2036,6 +2054,13 @@ var oncall = {
           url = this.data.url + oncall.data.user,
           data = $form.find('select[name="time_zone"]').val();
 
+      let userContactsElements = this.data.$form + ' input[type=text][name^="contactmode-"]';
+      let userContacts = {};
+      $(userContactsElements).each(function(){
+        let mode = $( this ).attr('id');
+        userContacts[mode] = $( this ).val();
+      });
+
       $cta.addClass('loading disabled').prop('disabled', true);
 
       $.ajax({
@@ -2043,7 +2068,7 @@ var oncall = {
         url: url,
         dataType: 'html',
         contentType: 'application/json',
-        data: JSON.stringify({time_zone: data})
+        data: JSON.stringify({contacts: userContacts, time_zone: data})
       }).done(function(){
         oncall.data.userTimezone = data;
         oncall.alerts.createAlert('Settings saved.', 'success', $form);
@@ -2053,6 +2078,7 @@ var oncall = {
       }).always(function(){
         $cta.removeClass('loading disabled').prop('disabled', false);
       });
+
     },
     notifications: {
       data: {
@@ -2125,7 +2151,7 @@ var oncall = {
             notificationData.types = types[0];
             notificationData.typeMap = self.data.typeMap;
             notificationData.roles = oncall.data.roles;
-            notificationData.modes = oncall.data.modes;
+            notificationData.modes = oncall.data.modes.map(x => x.name);
             notificationData.teams = teamsData[0];
             notificationData.name = oncall.data.user; // using key `name` instead of `username` here because thats what API returns for /users
             self.data.notificationData = notificationData;
