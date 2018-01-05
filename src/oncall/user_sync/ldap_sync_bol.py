@@ -706,25 +706,26 @@ def sync(config, engine):
                 logger.info("%s: photo_url -> %s", username, image_url)
                 engine.execute(photo_update_sql, (image_url, username))
                 stats['user_photos_updated'] += 1
-            for mode in modes:
-                if mode in ldap_contacts and ldap_contacts[mode]:
-                    if mode in db_contacts:
-                        if ldap_contacts[mode] != db_contacts[mode]:
-                            logger.info("%s: mode -> %s", username, mode)
-                            engine.execute(contact_update_sql, (ldap_contacts[mode], username, modes[mode]))
-                            stats['user_contacts_updated'] += 1
-                    else:
-                        logger.info("%s: adding mode %s", username, mode)
-                        engine.execute(contact_insert_sql, (username, modes[mode], ldap_contacts[mode]))
-                        stats['user_contacts_updated'] += 1
-                elif mode in db_contacts:
-                    logger.info("%s: deleting mode %s", username, mode)
-                    engine.execute(contact_delete_sql, (username, modes[mode]))
-                    stats['user_contacts_updated'] += 1
-                else:
-                    # allow missing call and sms modes, as not everyone has a phone
-                    if not mode in ['call', 'sms']:
-                        logger.info("%s: missing mode %s", username, mode)
+            # we only sync contact modes during the initial import
+            # for mode in modes:
+            #     if mode in ldap_contacts and ldap_contacts[mode]:
+            #         if mode in db_contacts:
+            #             if ldap_contacts[mode] != db_contacts[mode]:
+            #                 logger.info("%s: mode -> %s", username, mode)
+            #                 engine.execute(contact_update_sql, (ldap_contacts[mode], username, modes[mode]))
+            #                 stats['user_contacts_updated'] += 1
+            #         else:
+            #             logger.info("%s: adding mode %s", username, mode)
+            #             engine.execute(contact_insert_sql, (username, modes[mode], ldap_contacts[mode]))
+            #             stats['user_contacts_updated'] += 1
+            #     elif mode in db_contacts:
+            #         logger.info("%s: deleting mode %s", username, mode)
+            #         engine.execute(contact_delete_sql, (username, modes[mode]))
+            #         stats['user_contacts_updated'] += 1
+            #     else:
+            #         # allow missing call and sms modes, as not everyone has a phone
+            #         if not mode in ['call', 'sms']:
+            #             logger.info("%s: missing mode %s", username, mode)
         except SQLAlchemyError:
             stats['users_failed_to_update'] += 1
             stats['sql_errors'] += 1
