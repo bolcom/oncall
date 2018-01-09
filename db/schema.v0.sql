@@ -289,14 +289,13 @@ CREATE TABLE IF NOT EXISTS `roster_user` (
 CREATE TABLE IF NOT EXISTS `contact_mode` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL,
-  `label` varchar(255) NOT NULL,
   PRIMARY KEY (`id`)
 );
 -- -----------------------------------------------------
 -- Initialize contact modes
 -- -----------------------------------------------------
-INSERT INTO `contact_mode` (`name`, `label`)
-VALUES ('email','Email'), ('sms','SMS'), ('call','Phone Number'), ('slack','Slack ID');
+INSERT INTO `contact_mode` (`name`)
+VALUES ('email'), ('sms'), ('call'), ('slack');
 
 -- -----------------------------------------------------
 -- Table `user_contact`
