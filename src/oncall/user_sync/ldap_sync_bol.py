@@ -258,8 +258,11 @@ def set_team_admins(engine, teamname, members):
     team_member_id_map = {}
     for member in members:
         user_id = get_user_id(engine, member)
-        team_member_id_map[user_id] = member
-        team_member_ids.append(user_id)
+        if user_id:
+            team_member_id_map[user_id] = member
+            team_member_ids.append(user_id)
+        else:
+            logger.info("When setting admins for %s, could not find %s id", teamname, member)
 
     team_admins_to_remove = set(team_admin_ids) - set(team_member_ids)
     for exadmin in team_admins_to_remove:
@@ -288,8 +291,8 @@ def get_user_id(engine, user):
     try:
         user_id = engine.execute('SELECT `id`, `name` FROM `user` WHERE `name`="'+user+'"').fetchone()['id']
     except TypeError:
-        logger.exception("Unable to get user id for user %s", user)
-        raise
+        return None
+
     return user_id
 
 
@@ -524,7 +527,8 @@ def remove_teams(engine, teams):
         # remove team dummy user and roster user
         team_id = get_team_id(engine, team)
         roster_user_id = get_user_id(engine, team)
-        delete_roster_user(engine, team_id, roster_user_id)
+        if roster_user_id:
+            delete_roster_user(engine, team_id, roster_user_id)
         delete_team_schedules(engine, team_id)
         prune_user(engine, team)
         stats['teams_deactivated'] += 1
@@ -560,9 +564,12 @@ def set_team_roster(engine, team_id):
         logger.info("Team %s missing default roster - inserting", get_team_name(engine, team_id))
         team = get_team_name(engine, team_id)
         dummy_user_id = get_user_id(engine, team)
-        roster_id = insert_roster(engine, team+"-default", team_id)
-        insert_roster_user(engine, roster_id, dummy_user_id, 1, 0)
-        insert_team_user(engine, team_id, dummy_user_id)
+        if dummy_user_id:
+            roster_id = insert_roster(engine, team+"-default", team_id)
+            insert_roster_user(engine, roster_id, dummy_user_id, 1, 0)
+            insert_team_user(engine, team_id, dummy_user_id)
+        else:
+            logger.info("Failed to get dummy team user id. Cannot set team roster for %s", team)
 
 
 # Immutable: team admins, dummy roster
