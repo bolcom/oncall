@@ -234,8 +234,6 @@ def get_ldap_teams(users):
 
     for team_dn in LDAP_SETTINGS['team_additional_groups']:
         rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
-        logger.info('Loaded additional team entry %s from ldap.', team_dn)
-
         for dn, ldap_dict in rdata:
             team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict)
             if team:
@@ -634,7 +632,7 @@ def insert_user(engine, username, ldap_user, modes):
 
     for key, value in ldap_user.iteritems():
         if value and key in modes:
-            logger.debug('\t%s -> %s' % (key, value))
+            logger.debug('\tmode: %s -> %s' % (key, value))
             user_contact_add_sql = 'INSERT INTO `user_contact` (`user_id`, `mode_id`, `destination`) VALUES (%s, %s, %s)'
             engine.execute(user_contact_add_sql, (user_id, modes[key], value))
 
@@ -653,11 +651,12 @@ def sync(config, engine):
                      ORDER BY `user`.`name`'''
     for row in engine.execute(users_query):
         contacts = oncall_users.setdefault(row.name, {})
-        if row.mode is None or row.destination is None:
-            continue
-        contacts[row.mode] = row.destination
         contacts['full_name'] = row.full_name
         contacts['photo_url'] = row.photo_url
+        if row.mode is None or row.destination is None:
+            logger.info("No user_contact info for %s currently in oncall", row.name)
+            continue
+        contacts[row.mode] = row.destination
 
     oncall_usernames = set(oncall_users)
 
