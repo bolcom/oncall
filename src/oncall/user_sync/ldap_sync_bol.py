@@ -618,7 +618,7 @@ def sync_teams(config, engine, ldap_users):
 def insert_user(engine, username, ldap_user, modes):
     logger.debug('Inserting user %s', username)
 
-    user_add_sql = 'INSERT INTO `user` (`name`, `full_name`, `photo_url`) VALUES (%s, %s, %s)'
+    user_add_sql = 'REPLACE INTO `user` (`name`, `full_name`, `photo_url`) VALUES (%s, %s, %s)'
 
     full_name = ldap_user.pop('name')
     try:
