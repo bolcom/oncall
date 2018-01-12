@@ -1,4 +1,4 @@
-//-- Moment js + moment timezone. Timezone data is loaded separately in moment-tz-data.js
+//-- Moment js + moment timezone. Timezone data is loaded separately in moment-tz-data-full.js
 
 //! moment.js
 //! version : 2.17.1

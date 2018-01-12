@@ -139,7 +139,7 @@
     _createMoment: function (date, format) {
       // date can be moment object or string with matching format passed in.
       // See http://momentjs.com/docs/#/parsing/string-format/
-      // tz optional, will create the date under specified TZ. TZ data is managed in moment-tz-data.js
+      // tz optional, will create the date under specified TZ. TZ data is managed in moment-tz-data-full.js
       var format = format || this.options.dateFormat + ' ' + this.options.timeFormat;
 
       if (this.options.timezone) {
