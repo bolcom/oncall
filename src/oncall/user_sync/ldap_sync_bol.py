@@ -620,8 +620,9 @@ def insert_user(engine, username, ldap_user, modes):
 
     full_name = ldap_user.pop('name')
     try:
-        image_url = LDAP_SETTINGS['image_url']  # % username
-        user_id = engine.execute(user_add_sql, (username, full_name, image_url)).lastrowid
+        photo_url_tpl = LDAP_SETTINGS.get('image_url')
+        photo_url = photo_url_tpl % username if photo_url_tpl else None
+        user_id = engine.execute(user_add_sql, (username, full_name, photo_url)).lastrowid
     except SQLAlchemyError:
         stats['users_failed_to_add'] += 1
         stats['sql_errors'] += 1
@@ -707,10 +708,10 @@ def sync(config, engine):
                 logger.info("%s: full_name -> %s", username, full_name)
                 engine.execute(name_update_sql, (full_name, username))
                 stats['user_names_updated'] += 1
-            image_url = LDAP_SETTINGS['image_url']  # % username
-            if image_url != db_contacts.get('photo_url'):
-                logger.info("%s: photo_url -> %s", username, image_url)
-                engine.execute(photo_update_sql, (image_url, username))
+            if not db_contacts.get('photo_url'):
+                photo_url_tpl = LDAP_SETTINGS.get('image_url')
+                photo_url = photo_url_tpl % username if photo_url_tpl else None
+                engine.execute(photo_update_sql, (photo_url, username))
                 stats['user_photos_updated'] += 1
             # we only sync contact modes during the initial import
             # for mode in modes:
