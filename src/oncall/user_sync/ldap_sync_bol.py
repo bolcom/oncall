@@ -6,6 +6,7 @@ import time
 import yaml
 import logging
 import ldap
+import yaml
 
 from oncall import metrics
 from ldap.controls import SimplePagedResultsControl
@@ -56,6 +57,9 @@ stats = {
 }
 
 LDAP_SETTINGS = {}
+SCRUMTEAMS = {}
+STANDBYTEAMS = {}
+STANDBYESCALATIONTEAMS = {}
 
 
 def normalize_phone_number(num):
@@ -499,14 +503,33 @@ def add_teams(engine, teams, ldap_teams):
         # add default roster and schedule
         roster_id = insert_roster(engine, team+"-default", team_id)
         insert_roster_user(engine, roster_id, dummy_user_id, 1, 0)
-        insert_team_schedule_defaults(engine, team_id, roster_id)
+
+        # different default schedules for standby teams
+        teamtype = 'officehours'
+        if teamname in STANDBYTEAMS or teamname in STANDBYESCALATIONTEAMS:
+            teamtype = 'standby'
+
+        insert_team_schedule_defaults(engine, team_id, roster_id, teamtype)
 
 
 def get_dummy_ldap_user(phonenumber, team):
+    sane_team = team.replace("ad-", "")
+
+    hipchat = "Team " + sane_team[4:] + " Alerts"
+    email = sane_team + '@bol.com'
+    if sane_team in SCRUMTEAMS:
+        if 'hipchat_room' in SCRUMTEAMS[sane_team]:
+            hipchat = SCRUMTEAMS[sane_team]['hipchat_room']
+        if 'email_address' in SCRUMTEAMS[sane_team]:
+            email = SCRUMTEAMS[sane_team]['email_address']
+        if 'mobile_phone' in SCRUMTEAMS[sane_team]:
+            phonenumber = SCRUMTEAMS[sane_team]['mobile_phone']
+
     ldap_user = {'sms': phonenumber,
                  'call': phonenumber,
-                 'email': team+'@bol.com',
+                 'email': email,
                  'name': team,
+                 'hipchat': hipchat,
                  'slack': team}
     return ldap_user
 
@@ -532,27 +555,53 @@ def remove_teams(engine, teams):
         stats['teams_deactivated'] += 1
 
 
-def insert_team_schedule_defaults(engine, team_id, roster_id):
+def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
     auto_populate_threshold = 120
     advanced_mode = 1
     last_epoch_scheduled = "NULL"
     last_scheduled_user_id = "NULL"
     scheduler_id = 1  # default scheduler
     role_id = 1  # primary
-    duration = "36000"  # 10 hours in seconds
-    default_schedule_event_start_offsets = [
-            "115200",
-            "201600",
-            "288000",
-            "374400",
-            "460800"
-            ]
 
-    schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
-            auto_populate_threshold, advanced_mode, last_epoch_scheduled,
-            last_scheduled_user_id, scheduler_id)
-    for start_offset in default_schedule_event_start_offsets:
-        insert_schedule_event(engine, schedule_id, start_offset, duration)
+    if teamtype == 'officehours':
+        duration = "36000"  # 10 hours in seconds
+        default_schedule_event_start_offsets = [
+                "115200",
+                "201600",
+                "288000",
+                "374400",
+                "460800"
+                ]
+
+        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
+                auto_populate_threshold, advanced_mode, last_epoch_scheduled,
+                last_scheduled_user_id, scheduler_id)
+
+        for start_offset in default_schedule_event_start_offsets:
+            insert_schedule_event(engine, schedule_id, start_offset, duration)
+
+    elif teamtype == 'standby':
+        duration = "50400"  # 14 hours in seconds
+        default_schedule_event_start_offsets = [
+                "151200",
+                "237600",
+                "324000",
+                "410400"
+                ]
+
+        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
+                auto_populate_threshold, advanced_mode, last_epoch_scheduled,
+                last_scheduled_user_id, scheduler_id)
+
+        for start_offset in default_schedule_event_start_offsets:
+            insert_schedule_event(engine, schedule_id, start_offset, duration)
+
+        friday_till_monday_duration = "223200"  # friday 18:00 to monday 08:00
+        weekend_schedule_event_start_offsets = [ '496800' ]
+
+        for start_offset in weekend_schedule_event_start_offsets:
+            insert_schedule_event(engine, schedule_id, start_offset, friday_till_monday_duration)
+
 
 
 def set_team_roster(engine, team_id):
@@ -767,8 +816,20 @@ def metrics_sender():
 
 def main(config):
     global LDAP_SETTINGS
+    global SCRUMTEAMS
+    global STANDBYTEAMS
+    global STANDBYESCALATIONTEAMS
 
     LDAP_SETTINGS = config['ldap_sync']
+    STANDBYTEAMS = config['ldap_sync']['standby_teams']
+    STANDBYESCALATIONTEAMS = config['ldap_sync']['standby_escalation_teams']
+    teamsfile = config['ldap_sync']['scrumteams_file']
+
+    with open(teamsfile, 'r') as stream:
+        try:
+            SCRUMTEAMS = yaml.load(stream)
+        except yaml.YAMLError as err:
+            logger.info(err)
 
     metrics.init(config, 'oncall-ldap-user-sync', stats)
     spawn(metrics_sender)
