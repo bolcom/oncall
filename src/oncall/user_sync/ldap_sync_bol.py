@@ -497,7 +497,8 @@ def add_teams(engine, teams, ldap_teams):
         # add dummy user for team, to set up default roster and schedule
         modes = dict(list(engine.execute('SELECT `name`, `id` FROM `contact_mode`')))
         dummy_ldap_user = get_dummy_ldap_user(ldap_teams[team]['phonenumber'], team)
-        dummy_user_id = insert_user(engine, team, dummy_ldap_user, modes)
+        dummy_user_name = team + "-user"
+        dummy_user_id = insert_user(engine, dummy_user_name, dummy_ldap_user, modes)
         insert_team_user(engine, team_id, dummy_user_id)
 
         # add default roster and schedule
