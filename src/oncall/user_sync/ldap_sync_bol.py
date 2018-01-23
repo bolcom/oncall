@@ -162,7 +162,7 @@ def fetch_ldap():
                 slack = None
 
             # TODO: we'd definitely like to do something smarter here
-            hipchat = name.replace(' ', '')
+            hipchat = "@" + name.replace(' ', '')
             contacts = {'call': mobile, 'sms': mobile, 'email': mail, 'slack': slack, 'name': name, 'hipchat': hipchat}
             dn_map[dn] = username
             users[username] = contacts
@@ -516,7 +516,7 @@ def add_teams(engine, teams, ldap_teams):
 def get_dummy_ldap_user(phonenumber, team):
     sane_team = team.replace("ad-", "")
 
-    hipchat = "Team " + sane_team[4:] + " Alerts"
+    hipchat = ""
     email = sane_team + '@bol.com'
     if sane_team in SCRUMTEAMS:
         if 'hipchat_room' in SCRUMTEAMS[sane_team]:
