@@ -516,11 +516,11 @@ def add_teams(engine, teams, ldap_teams):
 def get_dummy_ldap_user(phonenumber, team):
     sane_team = team.replace("ad-", "")
 
-    hipchat = "@Team" + sane_team[4:]
+    hipchat = "@Team" + sane_team[4:].replace(" ", "")
     email = sane_team + '@bol.com'
     if sane_team in SCRUMTEAMS:
         if 'hipchat_room' in SCRUMTEAMS[sane_team]:
-            hipchat = SCRUMTEAMS[sane_team]['hipchat_room']
+            hipchat = "@" + SCRUMTEAMS[sane_team]['hipchat_room'].replace(" ", "")
         if 'email_address' in SCRUMTEAMS[sane_team]:
             email = SCRUMTEAMS[sane_team]['email_address']
         if 'mobile_phone' in SCRUMTEAMS[sane_team]:
