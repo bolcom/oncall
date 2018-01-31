@@ -27,6 +27,8 @@ ch.setFormatter(formatter)
 logger.setLevel(logging.INFO)
 logger.addHandler(ch)
 
+immutable_team_prefix = 'ad-'
+
 stats = {
     'ldap_found': 0,
     'sql_errors': 0,
@@ -204,7 +206,7 @@ def process_ldap_team_gon(users, dn, ldap_con, ldap_dict):
             except ldap.NO_SUCH_OBJECT:
                 logger.info("Team %s has a non-existant member: %s", teamname, member)
     teamphone = ldap_dict.get(LDAP_SETTINGS['team_attrs']['phonenumber'])
-    team["ad-" + teamname] = {'members': member_uids, 'phonenumber': teamphone}
+    team[immutable_team_prefix + teamname] = {'members': member_uids, 'phonenumber': teamphone}
 
     return team
 
@@ -478,11 +480,11 @@ def insert_schedule_event(engine, schedule_id, start, duration):
 
 def add_teams(engine, teams, ldap_teams):
     # Use replace here, to overwrite existing, but deactivated teams
-    team_add_sql = 'REPLACE INTO `team` (`name`, `slack_channel`, `email`, `scheduling_timezone`, `active`, `iris_plan`, `iris_enabled`) VALUES (%s, %s, %s, %s, 1, NULL, 0)'
+    team_add_sql = 'REPLACE INTO `team` (`name`, `slack_channel`, `email`, `scheduling_timezone`, `active`, `iris_plan`, `iris_enabled`, `override_phone_number`) VALUES (%s, %s, %s, %s, 1, NULL, 0, NULL)'
 
     for team in teams:
         logger.info('Inserting team %s', team)
-        teamname = team.replace('ad-', '')
+        teamname = team.replace(immutable_team_prefix, '')
         try:
             team_id = engine.execute(team_add_sql, (team, "#"+teamname, teamname+"@bol.com", "Europe/Amsterdam")).lastrowid
         except SQLAlchemyError:
@@ -514,7 +516,7 @@ def add_teams(engine, teams, ldap_teams):
 
 
 def get_dummy_ldap_user(phonenumber, team):
-    sane_team = team.replace("ad-", "")
+    sane_team = team.replace(immutable_team_prefix, "")
 
     hipchat = "@Team" + sane_team[4:].replace(" ", "")
     email = sane_team + '@bol.com'
@@ -642,9 +644,9 @@ def sync_teams(config, engine, ldap_users):
     for row in engine.execute(teams_query):
         oncall_teams.setdefault(row.name, {})
 
-    # "ad-" is the magic prefix we use to determine we're
+    # immutable_team_prefix is the magic prefix we use to determine we're
     # responsible for this team
-    oncall_teamnames = [x for x in set(oncall_teams) if x.startswith('ad-')]
+    oncall_teamnames = [x for x in set(oncall_teams) if x.startswith(immutable_team_prefix)]
     oncall_teamnames = set(oncall_teamnames)
 
     # teams from ldap
@@ -669,9 +671,13 @@ def insert_user(engine, username, ldap_user, modes):
     user_add_sql = 'REPLACE INTO `user` (`name`, `full_name`, `photo_url`) VALUES (%s, %s, %s)'
 
     full_name = ldap_user.pop('name')
+    photo_url_tpl = LDAP_SETTINGS.get('image_url')
     try:
-        photo_url_tpl = LDAP_SETTINGS.get('image_url')
         photo_url = photo_url_tpl % username if photo_url_tpl else None
+    except TypeError:
+        photo_url = None
+
+    try:
         user_id = engine.execute(user_add_sql, (username, full_name, photo_url)).lastrowid
     except SQLAlchemyError:
         stats['users_failed_to_add'] += 1
@@ -722,8 +728,8 @@ def sync(config, engine):
     # set of existing oncall users that are in ldap
     users_to_update = oncall_usernames & ldap_usernames
     # set of users in oncall but not ldap, assumed to be inactive
-    # Filter our "^ad-.*" users, which are dummy users associated with team accounts.
-    oncall_usernames_filtered = set([x for x in oncall_usernames if not x.startswith('ad-')])
+    # Filter our "^immutable_team_prefix.*" users, which are dummy users associated with team accounts.
+    oncall_usernames_filtered = set([x for x in oncall_usernames if not x.startswith(immutable_team_prefix)])
     inactive_users = oncall_usernames_filtered - ldap_usernames
     # users who need to be deactivated
     if inactive_users:
@@ -758,7 +764,7 @@ def sync(config, engine):
                 logger.info("%s: full_name -> %s", username, full_name)
                 engine.execute(name_update_sql, (full_name, username))
                 stats['user_names_updated'] += 1
-            if not db_contacts.get('photo_url'):
+            if 'image_url' in LDAP_SETTINGS and not db_contacts.get('photo_url'):
                 photo_url_tpl = LDAP_SETTINGS.get('image_url')
                 photo_url = photo_url_tpl % username if photo_url_tpl else None
                 engine.execute(photo_update_sql, (photo_url, username))
