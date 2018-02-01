@@ -27,7 +27,7 @@ ch.setFormatter(formatter)
 logger.setLevel(logging.INFO)
 logger.addHandler(ch)
 
-immutable_team_prefix = 'ad-'
+immutable_team_suffix = '-builtin'
 
 stats = {
     'ldap_found': 0,
@@ -60,8 +60,6 @@ stats = {
 
 LDAP_SETTINGS = {}
 SCRUMTEAMS = {}
-STANDBYTEAMS = {}
-STANDBYESCALATIONTEAMS = {}
 
 
 def normalize_phone_number(num):
@@ -159,13 +157,9 @@ def fetch_ldap():
 
             if mail:
                 mail = mail[0]
-                slack = mail.split('@')[0]
-            else:
-                slack = None
 
-            # TODO: we'd definitely like to do something smarter here
             hipchat = "@" + name.replace(' ', '')
-            contacts = {'call': mobile, 'sms': mobile, 'email': mail, 'slack': slack, 'name': name, 'hipchat': hipchat}
+            contacts = {'call': mobile, 'sms': mobile, 'email': mail, 'name': name, 'hipchat': hipchat}
             dn_map[dn] = username
             users[username] = contacts
 
@@ -182,7 +176,7 @@ def fetch_ldap():
 
 
 # given all ldap users, return an oncall team with contact details and members
-def process_ldap_team_gon(users, dn, ldap_con, ldap_dict):
+def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, override_teamname=None):
     if LDAP_SETTINGS['team_attrs']['members'] not in ldap_dict:
         logger.error('ERROR: invalid ldap entry for dn: %s', dn)
         return None
@@ -192,11 +186,25 @@ def process_ldap_team_gon(users, dn, ldap_con, ldap_dict):
     except KeyError:
         logger.error("Couldn't find name field for dn: %s", dn)
 
-    teamname = ldap_dict[teamname_field][0].replace('-gon', '')
+    if override_teamname:
+        teamname = override_teamname
+    else:
+        teamname = ldap_dict[teamname_field][0].replace('-gon', '')
 
     member_uids = []
     team = {}
-    for member in ldap_dict.get(LDAP_SETTINGS['team_attrs']['members']):
+
+    ldap_members = ldap_dict.get(LDAP_SETTINGS['team_attrs']['members'])
+
+    # filter teams without members or with only blacklisted members
+    if not ldap_members:
+        return team
+    if len(ldap_members) == 1:
+        if ldap_members[0] in LDAP_SETTINGS['member_blacklist']:
+            return team
+
+    # process members
+    for member in ldap_members:
         if member in LDAP_SETTINGS['member_blacklist']:
             continue
         if member in users:
@@ -205,11 +213,42 @@ def process_ldap_team_gon(users, dn, ldap_con, ldap_dict):
                 member_uids.append(rdata[0][1]['uid'][0])
             except ldap.NO_SUCH_OBJECT:
                 logger.info("Team %s has a non-existant member: %s", teamname, member)
+
     teamphone = ldap_dict.get(LDAP_SETTINGS['team_attrs']['phonenumber'])
-    team[immutable_team_prefix + teamname] = {'members': member_uids, 'phonenumber': teamphone}
+    team[teamname] = {'members': member_uids, 'phonenumber': teamphone}
 
     return team
 
+def get_additional_ldap_teams(users, team_type):
+    teams = {}
+
+    # bind ldap
+    ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
+    ldap_con = ldap.initialize(LDAP_SETTINGS['url'])
+    ldap_con.set_option(ldap.OPT_X_TLS_CACERTFILE, LDAP_SETTINGS['cert_path'])
+    ldap_con.simple_bind_s(LDAP_SETTINGS['user'], LDAP_SETTINGS['password'])
+
+    # query and process scrumteams
+    query = LDAP_SETTINGS['team_query']
+
+    logger.info('Processing %s additional %s teams from ldap', len(LDAP_SETTINGS['team_additional_groups']), team_type)
+    for team in LDAP_SETTINGS['team_additional_groups']:
+        if team['type'] == team_type:
+            team_dn = team['dn']
+            rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
+            for dn, ldap_dict in rdata:
+                ldap_team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, team['alias'])
+                if ldap_team:
+                    teams.update(ldap_team)
+
+    # for team_dn in LDAP_SETTINGS['team_additional_groups']:
+    #     rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
+    #     for dn, ldap_dict in rdata:
+    #         team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict)
+    #         if team:
+    #             teams.update(team)
+
+    return teams
 
 def get_ldap_teams(users):
     teams = {}
@@ -233,17 +272,6 @@ def get_ldap_teams(users):
         team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict)
         if team:
             teams.update(team)
-
-    # process team_additional_groups
-    attrs = ['distinguishedName'] + LDAP_SETTINGS['team_attrs'].values()
-    query = LDAP_SETTINGS['team_query']
-
-    for team_dn in LDAP_SETTINGS['team_additional_groups']:
-        rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
-        for dn, ldap_dict in rdata:
-            team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict)
-            if team:
-                teams.update(team)
 
     return teams
 
@@ -484,9 +512,9 @@ def add_teams(engine, teams, ldap_teams):
 
     for team in teams:
         logger.info('Inserting team %s', team)
-        teamname = team.replace(immutable_team_prefix, '')
+        bol_teamname = team.replace(immutable_team_suffix, '')
         try:
-            team_id = engine.execute(team_add_sql, (team, "#"+teamname, teamname+"@bol.com", "Europe/Amsterdam")).lastrowid
+            team_id = engine.execute(team_add_sql, (team, "#"+bol_teamname, bol_teamname+"@bol.com", "Europe/Amsterdam")).lastrowid
         except SQLAlchemyError:
             stats['teams_failed_to_add'] += 1
             stats['sql_errors'] += 1
@@ -508,32 +536,33 @@ def add_teams(engine, teams, ldap_teams):
         insert_roster_user(engine, roster_id, dummy_user_id, 1, 0)
 
         # different default schedules for standby teams
-        teamtype = 'officehours'
-        if teamname in STANDBYTEAMS or teamname in STANDBYESCALATIONTEAMS:
+        if team.endswith('-standby' + immutable_team_suffix):
             teamtype = 'standby'
+        elif team.endswith('-24x7' + immutable_team_suffix):
+            teamtype = '24x7'
+        elif team.endswith('-workhours' + immutable_team_suffix):
+            teamtype = 'workhours'
+        else:
+            teamtype = '24x7'
 
         insert_team_schedule_defaults(engine, team_id, roster_id, teamtype)
 
 
 def get_dummy_ldap_user(phonenumber, team):
-    sane_team = team.replace(immutable_team_prefix, "")
+    bol_teamname = team.replace(immutable_team_suffix, "")
 
-    hipchat = "@Team" + sane_team[4:].replace(" ", "")
-    email = sane_team + '@bol.com'
-    if sane_team in SCRUMTEAMS:
-        if 'hipchat_room' in SCRUMTEAMS[sane_team]:
-            hipchat = "@" + str(SCRUMTEAMS[sane_team]['hipchat_room']).replace(" ", "")
-        if 'email_address' in SCRUMTEAMS[sane_team]:
-            email = SCRUMTEAMS[sane_team]['email_address']
-        if 'mobile_phone' in SCRUMTEAMS[sane_team]:
-            phonenumber = SCRUMTEAMS[sane_team]['mobile_phone']
+    email = bol_teamname + '@bol.com'
+    if bol_teamname in SCRUMTEAMS:
+        if 'email_address' in SCRUMTEAMS[bol_teamname]:
+            email = SCRUMTEAMS[bol_teamname]['email_address']
+        if 'mobile_phone' in SCRUMTEAMS[bol_teamname]:
+            phonenumber = SCRUMTEAMS[bol_teamname]['mobile_phone']
 
     ldap_user = {'sms': phonenumber,
                  'call': phonenumber,
                  'email': email,
                  'name': team,
-                 'hipchat': hipchat,
-                 'slack': team}
+                }
     return ldap_user
 
 
@@ -566,14 +595,26 @@ def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
     scheduler_id = 1  # default scheduler
     role_id = 1  # primary
 
-    if teamtype == 'officehours':
+    if teamtype == 'workhours':
         duration = "36000"  # 10 hours in seconds
         default_schedule_event_start_offsets = [
                 "115200",
                 "201600",
                 "288000",
                 "374400",
-                "460800"
+                "460800",
+                ]
+
+        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
+                auto_populate_threshold, advanced_mode, last_epoch_scheduled,
+                last_scheduled_user_id, scheduler_id)
+
+        for start_offset in default_schedule_event_start_offsets:
+            insert_schedule_event(engine, schedule_id, start_offset, duration)
+    elif teamtype == '24x7':
+        duration = "604800"  # 7 days in seconds
+        default_schedule_event_start_offsets = [
+                "86400",
                 ]
 
         schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
@@ -589,7 +630,7 @@ def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
                 "151200",
                 "237600",
                 "324000",
-                "410400"
+                "410400",
                 ]
 
         schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
@@ -630,6 +671,31 @@ def update_teams(engine, teams, ldap_teams):
         set_team_roster(engine, team_id)
 
 
+# use ldap teams to generate multiple oncall teams we want to manage
+def generate_managed_teams(ldap_teams, team_type):
+    teams = {}
+    for team in ldap_teams:
+        # allow team aliasing
+        if 'alias' in ldap_teams[team]:
+            team = ldap_teams[team]['alias']
+
+        # Convenient team names
+        team_24x7 = team + '-24x7' + immutable_team_suffix
+        team_workhours = team + '-workhours' + immutable_team_suffix
+        team_standby = team + '-standby' + immutable_team_suffix
+
+        if team_type == 'scrumteam':
+            teams[team_24x7] = ldap_teams[team]
+            teams[team_workhours] = ldap_teams[team]
+        elif team_type == 'itops':
+            teams[team_24x7] = ldap_teams[team]
+            teams[team_workhours] = ldap_teams[team]
+        elif team_type == 'standby':
+            teams[team_24x7] = ldap_teams[team]
+            teams[team_standby] = ldap_teams[team]
+
+    return teams
+
 def sync_teams(config, engine, ldap_users):
     teams_query = '''SELECT `team`.`name` as `name`,
                             `team`.`slack_channel` as `slack_channel`,
@@ -644,25 +710,37 @@ def sync_teams(config, engine, ldap_users):
     for row in engine.execute(teams_query):
         oncall_teams.setdefault(row.name, {})
 
-    # immutable_team_prefix is the magic prefix we use to determine we're
-    # responsible for this team
-    oncall_teamnames = [x for x in set(oncall_teams) if x.startswith(immutable_team_prefix)]
+    # immutable_team_suffix is the magic suffix we use to determine we're
+    # managing this team
+    oncall_teamnames = [x for x in set(oncall_teams) if x.endswith(immutable_team_suffix)]
     oncall_teamnames = set(oncall_teamnames)
 
     # teams from ldap
     ldap_teams = get_ldap_teams(ldap_users)
-    ldap_teamnames = set(ldap_teams)
+    additional_itops_ldap_teams = get_additional_ldap_teams(ldap_users, 'itops')
+    additional_standby_ldap_teams = get_additional_ldap_teams(ldap_users, 'standby')
+
+    # get all teams we want to manage
+    managed_scrumteams = generate_managed_teams(ldap_teams, 'scrumteam')
+    managed_itops = generate_managed_teams(additional_itops_ldap_teams, 'itops')
+    managed_standby = generate_managed_teams(additional_standby_ldap_teams, 'standby')
+    # merge
+    all_managed_teams = managed_scrumteams.copy()
+    all_managed_teams.update(managed_itops)
+    all_managed_teams.update(managed_standby)
+
+    all_managed_teamnames = set(all_managed_teams)
 
     # set of ldap teams not in oncall
-    teams_to_insert = ldap_teamnames - oncall_teamnames
+    teams_to_insert = all_managed_teamnames - oncall_teamnames
     # set of existing oncall teams that are in ldap
-    teams_to_update = oncall_teamnames & ldap_teamnames
+    teams_to_update = oncall_teamnames & all_managed_teamnames
     # set of teams in oncall but not ldap, assumed to be inactive
-    inactive_teams = oncall_teamnames - ldap_teamnames
+    inactive_teams = oncall_teamnames - all_managed_teamnames
 
-    add_teams(engine, teams_to_insert, ldap_teams)
+    add_teams(engine, teams_to_insert, all_managed_teams)
     remove_teams(engine, inactive_teams)
-    update_teams(engine, teams_to_update, ldap_teams)
+    update_teams(engine, teams_to_update, all_managed_teams)
 
 
 def insert_user(engine, username, ldap_user, modes):
@@ -728,8 +806,8 @@ def sync(config, engine):
     # set of existing oncall users that are in ldap
     users_to_update = oncall_usernames & ldap_usernames
     # set of users in oncall but not ldap, assumed to be inactive
-    # Filter our "^immutable_team_prefix.*" users, which are dummy users associated with team accounts.
-    oncall_usernames_filtered = set([x for x in oncall_usernames if not x.startswith(immutable_team_prefix)])
+    # Filter our ".*immutable_team_suffix$" users, which are dummy users associated with team accounts.
+    oncall_usernames_filtered = set([x for x in oncall_usernames if not x.endswith(immutable_team_suffix)])
     inactive_users = oncall_usernames_filtered - ldap_usernames
     # users who need to be deactivated
     if inactive_users:
@@ -824,12 +902,8 @@ def metrics_sender():
 def main(config):
     global LDAP_SETTINGS
     global SCRUMTEAMS
-    global STANDBYTEAMS
-    global STANDBYESCALATIONTEAMS
 
     LDAP_SETTINGS = config['ldap_sync']
-    STANDBYTEAMS = config['ldap_sync']['standby_teams']
-    STANDBYESCALATIONTEAMS = config['ldap_sync']['standby_escalation_teams']
     teamsfile = config['ldap_sync']['scrumteams_file']
 
     with open(teamsfile, 'r') as stream:
