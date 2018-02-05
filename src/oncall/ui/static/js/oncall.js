@@ -125,6 +125,7 @@ var oncall = {
     return $.get(this.data.userUrl + this.data.user).done(function(data){
       self.data.userInfo = data;
       self.data.user = data.name;
+      self.data.userIsGod = data.god;
       self.data.userTimezone = data.time_zone;
       self.data.userInfoPromise.resolve();
       self.renderUserInfo.call(self, data);
@@ -750,6 +751,7 @@ var oncall = {
           email = $form.find('#team-email').val(),
           slack = $form.find('#team-slack').val(),
           timezone = $form.find('#team-timezone').val(),
+          overrideNumber = $form.find('#team-override-phone').val(),
           irisPlan = $form.find('#team-irisplan').val(),
           irisEnabled = $form.find('#team-iris-enabled').prop('checked'),
           model = {};
@@ -775,6 +777,7 @@ var oncall = {
               email: email,
               slack_channel: slack,
               scheduling_timezone: timezone,
+              override_phone_number: overrideNumber,
               iris_plan: irisPlan,
               iris_enabled: irisEnabled ? '1' : '0',
               page: self.data.route
@@ -963,7 +966,7 @@ var oncall = {
                 self.data.$calendar.find('[data-id="' + evtId + '"]').attr('data-modal-open', false);
               },
               user: oncall.data.user,
-              readOnly: oncall.data.user && Object.keys(self.data.teamData.users).indexOf(oncall.data.user) !== -1 ? false : true,
+              readOnly: oncall.data.user && Object.keys(self.data.teamData.users).indexOf(oncall.data.user) !== -1 ? false : true && oncall.data.userIsGod === 0,
               timezone: oncall.data.userTimezone,
               team: self.data.teamName,
               roles: oncall.data.roles
@@ -976,9 +979,13 @@ var oncall = {
 
         data.isAdmin = false;
 
-        for (var i in data.admins) {
-          if (data.admins[i].name === oncall.data.user) {
-            data.isAdmin = true;
+        if (oncall.data.userIsGod === 1) {
+          data.isAdmin = true;
+        } else {
+          for (var i in data.admins) {
+            if (data.admins[i].name === oncall.data.user) {
+              data.isAdmin = true;
+            }
           }
         }
 
@@ -1231,10 +1238,13 @@ var oncall = {
         var data = this.data.teamData;
 
         data.isAdmin = false;
-
-        for (var i in data.admins) {
-          if (data.admins[i].name === oncall.data.user) {
-            data.isAdmin = true;
+        if (oncall.data.userIsGod === 1) {
+          data.isAdmin = true;
+        } else {
+          for (var i in data.admins) {
+            if (data.admins[i].name === oncall.data.user) {
+              data.isAdmin = true;
+            }
           }
         }
 
@@ -2003,10 +2013,12 @@ var oncall = {
       pageSource: $('#settings-template').html(),
       $form: '#user-settings-form',
       settingsSubheaderTemplate: $('#settings-subheader-template').html(),
-      subheaderWrapper: '.subheader-wrapper'
+      subheaderWrapper: '.subheader-wrapper',
+      telmodes: ["call", "sms"]
     },
     init: function(){
       Handlebars.registerPartial('settings-subheader', this.data.settingsSubheaderTemplate);
+      oncall.getModes();
       this.getData();
     },
     events: function(){
@@ -2021,10 +2033,26 @@ var oncall = {
       }
     },
     renderPage: function(data){
+      $.when(
+        oncall.data.modesPromise
+      ).done(function() {
+        let contactModes = [];
+
+        for(let key in data.contacts)
+        {
+          contactModes.push({
+            label: key.substr(0, 1).toUpperCase() + key.substr(1),
+            mode: key,
+            value: data.contacts[key]
+          });
+        }
+        data.contactmodes = contactModes;
+      });
       var template = Handlebars.compile(this.data.pageSource),
            self = this;
       oncall.data.timezonesPromise.done(function() {
         data.timezones = oncall.data.timezones;
+        data.telmodes = self.data.telmodes;
         self.data.$page.html(template(data));
         self.events();
       });
@@ -2035,6 +2063,13 @@ var oncall = {
           $cta = $form.find('button[type="submit"]'),
           url = this.data.url + oncall.data.user,
           data = $form.find('select[name="time_zone"]').val();
+          userContactsElements = this.data.$form + ' input[type=text][name^="contactmode-"]';
+          userContacts = {};
+
+      $(userContactsElements).each(function(){
+        let mode = $( this ).attr('id');
+        userContacts[mode] = $( this ).val();
+      });
 
       $cta.addClass('loading disabled').prop('disabled', true);
 
@@ -2043,7 +2078,7 @@ var oncall = {
         url: url,
         dataType: 'html',
         contentType: 'application/json',
-        data: JSON.stringify({time_zone: data})
+        data: JSON.stringify({contacts: userContacts, time_zone: data})
       }).done(function(){
         oncall.data.userTimezone = data;
         oncall.alerts.createAlert('Settings saved.', 'success', $form);
@@ -2053,6 +2088,7 @@ var oncall = {
       }).always(function(){
         $cta.removeClass('loading disabled').prop('disabled', false);
       });
+
     },
     notifications: {
       data: {
@@ -2370,6 +2406,7 @@ var oncall = {
           $teamEmail = $modalForm.find('#team-email'),
           $teamSlack = $modalForm.find('#team-slack'),
           $teamTimezone = $modalForm.find('#team-timezone'),
+          $teamNumber = $modalForm.find('#team-override-phone'),
           $teamIrisPlan = $modalForm.find('#team-irisplan'),
           $teamIrisEnabled = $modalForm.find('#team-iris-enabled'),
           self = this,
@@ -2383,6 +2420,7 @@ var oncall = {
         $teamName.val($btn.attr('data-modal-name'));
         $teamEmail.val($btn.attr('data-modal-email'));
         $teamSlack.val($btn.attr('data-modal-slack'));
+        $teamNumber.val($btn.attr('data-modal-override-phone'));
         $teamIrisPlan.val($btn.attr('data-modal-irisplan'));
         $teamIrisEnabled.prop('checked', $btn.attr('data-modal-iris-enabled') === '1');
         $planInput = $('#team-irisplan');

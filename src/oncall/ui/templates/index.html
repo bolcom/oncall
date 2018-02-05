@@ -277,7 +277,7 @@
           <h3>
             {{name}}
             <span class="edit-team-name">
-              <i class="svg-icon svg-icon-pencil" data-toggle="modal" data-target="#team-edit-modal" data-modal-action="oncall.team.updateTeamName" data-modal-title="Update Team Info" data-modal-name="{{#if name}}{{name}}{{else}}{{@key}}{{/if}}" data-modal-email="{{email}}" data-modal-slack="{{slack_channel}}" data-modal-timezone="{{scheduling_timezone}}" data-modal-irisplan="{{iris_plan}}" data-modal-iris-enabled="{{iris_enabled}}" data-admin-action="true">
+              <i class="svg-icon svg-icon-pencil" data-toggle="modal" data-target="#team-edit-modal" data-modal-action="oncall.team.updateTeamName" data-modal-title="Update Team Info" data-modal-name="{{#if name}}{{name}}{{else}}{{@key}}{{/if}}" data-modal-email="{{email}}" data-modal-slack="{{slack_channel}}" data-modal-timezone="{{scheduling_timezone}}" data-modal-irisplan="{{iris_plan}}" data-modal-iris-enabled="{{iris_enabled}}" data-modal-override-phone="{{override_phone_number}}" data-admin-action="true">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 8 8" style="fill: currentColor">
                   <path d="M6 0l-1 1 2 2 1-1-2-2zm-2 2l-4 4v2h2l4-4-2-2z" />
                 </svg>
@@ -1159,46 +1159,31 @@
             </select>
           </td>
         </tr>
+        {{#each contactmodes}}
         <tr>
-          <td>Phone</td>
+          <td>{{label}}</td>
           <td>
             <span>
-            {{#if contacts.call}}
-              <a href="tel:{{contacts.call}}"> {{contacts.call}} </a>
-            {{else}}
-              {% endraw %}
-                {{missing_number_note|safe}}
-              {% raw %}
-            {{/if}}
+            {% endraw %} {% if usercontact_ui_readonly %} {% raw %}
+              {{#inArray mode ../telmodes}}
+                  {{#if value}}
+                    <a href="tel:{{value}}"> {{value}} </a>
+                  {{else}}
+                    {% endraw %}
+                      {{missing_number_note|safe}}
+                    {% raw %}
+                  {{/if}}
+              {{/inArray}}
+              {{^inArray mode ../telmodes}}
+                <span>{{value}}</span>
+              {{/inArray}}
+            {% endraw %} {% else %} {% raw %}
+                <input type="text" name="contactmode-{{mode}}" id="{{mode}}" class="form-control" value="{{value}}" />
+            {% endraw %} {% endif %} {% raw %}
             </span>
           </td>
         </tr>
-        <tr>
-          <td>SMS Number</td>
-          <td>
-            <span>
-              {{#if contacts.sms}}
-                <a href="tel:{{contacts.sms}}"> {{contacts.sms}} </a>
-              {{else}}
-                {% endraw %}
-                  {{missing_number_note|safe}}
-                {% raw %}
-              {{/if}}
-            </span>
-          </td>
-        </tr>
-        <tr>
-          <td>Email</td>
-          <td>
-            <span>{{contacts.email}}</span>
-          </td>
-        </tr>
-        <tr>
-          <td>Slack ID</td>
-          <td>
-            <span>{{contacts.slack}}</span>
-          </td>
-        </tr>
+        {{/each}}
       </table>
       <button type="submit" id="save-settings" class="btn btn-primary btn-sm pull-right"><span class="btn-text">Save Changes</span> <i class="loader loader-small"></i></button>
     </form>

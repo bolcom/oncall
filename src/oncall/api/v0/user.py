@@ -122,7 +122,7 @@ def on_put(req, resp, user_name):
     :statuscode 204: Successful edit
     :statuscode 404: User not found
     """
-    contacts_query = '''INSERT INTO user_contact (`user_id`, `mode_id`, `destination`) VALUES
+    contacts_query = '''REPLACE INTO user_contact (`user_id`, `mode_id`, `destination`) VALUES
                            ((SELECT `id` FROM `user` WHERE `name` = %(user)s),
                             (SELECT `id` FROM `contact_mode` WHERE `name` = %(mode)s),
                             %(destination)s)
@@ -143,7 +143,11 @@ def on_put(req, resp, user_name):
     cursor = connection.cursor()
     if set_clause:
         query = 'UPDATE `user` SET {0} WHERE `name` = %s'.format(set_clause)
-        query_data = tuple(data[field] for field in data) + (user_name,)
+        query_data = []
+        for field in data:
+            if field != 'contacts':
+                query_data.append(data[field])
+        query_data.append(user_name)
 
         cursor.execute(query, query_data)
         if cursor.rowcount != 1:
