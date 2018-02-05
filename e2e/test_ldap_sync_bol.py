@@ -1,7 +1,9 @@
-# Copyright (c) LinkedIn Corporation. All rights reserved. Licensed under the BSD-2 Clause license.
-# See LICENSE in the project root for license information.
-
 #!/usr/bin/env python
+
+### TODO:
+### - test dummy user creation
+### - test default roster
+### - test default schedule
 
 import requests
 import time
@@ -26,7 +28,8 @@ engine = create_engine(config['db']['conn']['str'] % config['db']['conn']['kwarg
 
 @prefix('test_ldap_sync_bol_create_team')
 def test_ldap_sync_bol_create_team(team):
-    ldap_teams = { 'team1x-24x7-builtin':
+    ldap_teams = {
+                   'team1x-24x7-builtin':
                    {
                       'phonenumber': ['+3112341234'],
                       'members': ['wleese', 'tvlieg']
@@ -55,7 +58,8 @@ def test_ldap_sync_bol_create_team(team):
 
 @prefix('test_ldap_sync_bol_generate_oncall_teams_scrum_teams')
 def test_ldap_sync_bol_generate_oncall_teams_scrum_teams(team):
-    ldap_teams = { 'team1x':
+    ldap_teams = {
+                   'team1x':
                    {
                       'phonenumber': ['+3112341234'],
                       'members': ['wleese', 'tvlieg']
