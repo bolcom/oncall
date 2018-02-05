@@ -1,3 +1,10 @@
+# NOTE:
+# This code has tests.
+# Please use to test changes.
+# Inspect .ci/* to setup the tests and then run:
+# py.test -v ./e2e/test_ldap_sync_bol.py
+#
+
 from gevent import monkey, sleep, spawn
 monkey.patch_all()  # NOQA
 
@@ -61,6 +68,7 @@ modes = {}
 
 LDAP_SETTINGS = {}
 SCRUMTEAMS = {}
+NOOP = False
 
 
 def normalize_phone_number(num):
@@ -701,11 +709,13 @@ def generate_oncall_teams(ldap_teams, team_type):
         elif team_type == 'standby':
             teams[team_24x7] = ldap_teams[team]
             teams[team_standby] = ldap_teams[team]
+        else:
+            logger.error("When generating oncall team for %s: received invalid team type: %s", team, team_type)
 
     return teams
 
 
-def sync_teams(config, engine, ldap_users):
+def get_oncall_teamnames(engine):
     teams_query = '''SELECT `team`.`name` as `name`,
                             `team`.`slack_channel` as `slack_channel`,
                             `team`.`email` as `email`,
@@ -724,29 +734,10 @@ def sync_teams(config, engine, ldap_users):
     oncall_teamnames = [x for x in set(oncall_teams) if x.endswith(immutable_team_suffix)]
     oncall_teamnames = set(oncall_teamnames)
 
-    # teams from ldap
-    ldap_teams = fetch_ldap_teams(ldap_users)
-    additional_itops_ldap_teams = fetch_additional_ldap_teams(ldap_users, 'itops')
-    additional_standby_ldap_teams = fetch_additional_ldap_teams(ldap_users, 'standby')
+    return oncall_teamnames
 
-    # get all teams we want to manage
-    managed_scrumteams = generate_oncall_teams(ldap_teams, 'scrumteam')
-    managed_itops = generate_oncall_teams(additional_itops_ldap_teams, 'itops')
-    managed_standby = generate_oncall_teams(additional_standby_ldap_teams, 'standby')
 
-    # merge all managed teams
-    all_managed_teams = managed_scrumteams.copy()
-    all_managed_teams.update(managed_itops)
-    all_managed_teams.update(managed_standby)
-    all_managed_teamnames = set(all_managed_teams)
-
-    # set of ldap teams not in oncall
-    teams_to_insert = all_managed_teamnames - oncall_teamnames
-    # set of existing oncall teams that are in ldap
-    teams_to_update = oncall_teamnames & all_managed_teamnames
-    # set of teams in oncall but not ldap, assumed to be inactive
-    inactive_teams = oncall_teamnames - all_managed_teamnames
-
+def sync_teams(engine, all_managed_teams, teams_to_insert, teams_to_update, inactive_teams):
     add_teams(engine, teams_to_insert, all_managed_teams)
     remove_teams(engine, inactive_teams)
     update_teams(engine, teams_to_update, all_managed_teams)
@@ -882,6 +873,7 @@ def sync(config, engine):
     global modes
     modes = dict(list(engine.execute('SELECT `name`, `id` FROM `contact_mode`')))
 
+    ### Users
     # existing oncall users
     oncall_users = fetch_oncall_users(engine)
     oncall_usernames = set(oncall_users)
@@ -912,11 +904,50 @@ def sync(config, engine):
     rows = engine.execute('SELECT name FROM user WHERE active = FALSE AND name IN %s', ldap_usernames)
     users_to_reactivate = (user.name for user in rows)
 
+    ### Teams
+    # teamnames from oncall
+    oncall_teamnames = get_oncall_teamnames(engine)
+
+    # teams from ldap
+    ldap_teams = fetch_ldap_teams(ldap_users)
+    additional_itops_ldap_teams = fetch_additional_ldap_teams(ldap_users, 'itops')
+    additional_standby_ldap_teams = fetch_additional_ldap_teams(ldap_users, 'standby')
+
+    # get all teams we want to manage
+    managed_scrumteams = generate_oncall_teams(ldap_teams, 'scrumteam')
+    managed_itops = generate_oncall_teams(additional_itops_ldap_teams, 'itops')
+    managed_standby = generate_oncall_teams(additional_standby_ldap_teams, 'standby')
+
+    # merge all managed teams
+    all_managed_teams = managed_scrumteams.copy()
+    all_managed_teams.update(managed_itops)
+    all_managed_teams.update(managed_standby)
+    all_managed_teamnames = set(all_managed_teams)
+
+    # set of ldap teams not in oncall
+    teams_to_insert = all_managed_teamnames - oncall_teamnames
+    # set of existing oncall teams that are in ldap
+    teams_to_update = oncall_teamnames & all_managed_teamnames
+    # set of teams in oncall but not ldap, assumed to be inactive
+    inactive_teams = oncall_teamnames - all_managed_teamnames
+
+    logger.info("Users to insert: %s", list(users_to_insert))
+    logger.info("Users to check for updating: %s", len(users_to_update))
+    logger.info("Users to purge: %s", list(users_to_purge))
+    logger.info("Users to reactivate: %s", list(users_to_reactivate))
+    logger.info("Teams to insert: %s", list(teams_to_insert))
+    logger.info("Teams to check for updating: %s", len(teams_to_update))
+    logger.info("Teams to purge: %s", list(inactive_teams))
+
+    if NOOP:
+        logger.info("No Op mode enabled. No changes made.")
+        return
+
     # sync users
     sync_users(engine, oncall_users, ldap_users, users_to_insert, users_to_update, users_to_purge, users_to_reactivate)
 
     # sync teams
-    sync_teams(config, engine, ldap_user_dns)
+    sync_teams(engine, ldap_teams, teams_to_insert, teams_to_update, inactive_teams)
 
 
 def metrics_sender():
@@ -926,8 +957,14 @@ def metrics_sender():
 
 
 def main(config):
+    global NOOP
     global LDAP_SETTINGS
     global SCRUMTEAMS
+
+    if len(sys.argv) == 3 and sys.argv[2] == '--noop':
+        NOOP = True
+    if len(sys.argv) > 3 or len(sys.argv) < 1:
+        sys.exit('USAGE: %s [--noop]' % sys.argv[0])
 
     LDAP_SETTINGS = config['ldap_sync']
     teamsfile = config['ldap_sync']['scrumteams_file']
