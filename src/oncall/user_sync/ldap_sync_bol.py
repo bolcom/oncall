@@ -187,44 +187,43 @@ def fetch_ldap():
 
 # given all ldap users, return an oncall team with contact details and members
 def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, override_teamname=None):
-    if LDAP_SETTINGS['team_attrs']['members'] not in ldap_dict:
+    member_attr = LDAP_SETTINGS['team_attrs']['members']
+    phonenumber_attr = LDAP_SETTINGS['team_attrs']['phonenumber']
+    teamname_attr = LDAP_SETTINGS['team_attrs']['name']
+    blacklist = LDAP_SETTINGS['member_blacklist']
+
+    if member_attr not in ldap_dict:
         logger.error('ERROR: invalid ldap entry for dn: %s', dn)
         return None
 
-    try:
-        teamname_field = LDAP_SETTINGS['team_attrs']['name']
-    except KeyError:
-        logger.error("Couldn't find name field for dn: %s", dn)
+    ldap_members = ldap_dict.get(member_attr)
 
     if override_teamname:
         teamname = override_teamname
     else:
-        teamname = ldap_dict[teamname_field][0].replace('-gon', '')
+        teamname = ldap_dict[teamname_attr][0].replace('-gon', '')
 
     member_uids = []
     team = {}
-
-    ldap_members = ldap_dict.get(LDAP_SETTINGS['team_attrs']['members'])
 
     # filter teams without members or with only blacklisted members
     if not ldap_members:
         return team
     if len(ldap_members) == 1:
-        if ldap_members[0] in LDAP_SETTINGS['member_blacklist']:
+        if ldap_members[0] in blacklist:
             return team
 
     # process members
     for member in ldap_members:
-        if member in LDAP_SETTINGS['member_blacklist']:
+        if member in blacklist:
             continue
-        if member in users:
-            try:
-                rdata = ldap_con.search_s(member, ldap.SCOPE_BASE, '(objectClass=*)', attrlist=['uid'])
-                member_uids.append(rdata[0][1]['uid'][0])
-            except ldap.NO_SUCH_OBJECT:
-                logger.info("Team %s has a non-existant member: %s", teamname, member)
+        try:
+            rdata = ldap_con.search_s(member, ldap.SCOPE_BASE, '(objectClass=*)', attrlist=['uid'])
+            member_uids.append(rdata[0][1]['uid'][0])
+        except ldap.NO_SUCH_OBJECT:
+            logger.info("Team %s has a non-existant member: %s", teamname, member)
 
-    teamphone = ldap_dict.get(LDAP_SETTINGS['team_attrs']['phonenumber'])
+    teamphone = ldap_dict.get(phonenumber_attr)
     team[teamname] = {'members': member_uids, 'phonenumber': teamphone}
 
     return team
