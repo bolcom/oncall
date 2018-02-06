@@ -186,11 +186,9 @@ def fetch_ldap():
 
 
 # given all ldap users, return an oncall team with contact details and members
-def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, override_teamname=None):
-    member_attr = LDAP_SETTINGS['team_attrs']['members']
-    phonenumber_attr = LDAP_SETTINGS['team_attrs']['phonenumber']
-    teamname_attr = LDAP_SETTINGS['team_attrs']['name']
-    blacklist = LDAP_SETTINGS['member_blacklist']
+def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumber_attr, teamname_attr, blacklist, override_teamname=None):
+    member_uids = []
+    team = {}
 
     if member_attr not in ldap_dict:
         logger.error('ERROR: invalid ldap entry for dn: %s', dn)
@@ -203,20 +201,17 @@ def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, override_teamname=None
     else:
         teamname = ldap_dict[teamname_attr][0].replace('-gon', '')
 
-    member_uids = []
-    team = {}
-
     # filter teams without members or with only blacklisted members
     if not ldap_members:
         return team
-    if len(ldap_members) == 1:
-        if ldap_members[0] in blacklist:
-            return team
+
+    # filter blacklisted members
+    ldap_members = [item for item in ldap_members if item not in blacklist]
+    if len(ldap_members) == 0:
+        return team
 
     # process members
     for member in ldap_members:
-        if member in blacklist:
-            continue
         try:
             rdata = ldap_con.search_s(member, ldap.SCOPE_BASE, '(objectClass=*)', attrlist=['uid'])
             member_uids.append(rdata[0][1]['uid'][0])
@@ -230,6 +225,11 @@ def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, override_teamname=None
 
 
 def fetch_additional_ldap_teams(users, team_type):
+    member_attr = LDAP_SETTINGS['team_attrs']['members']
+    phonenumber_attr = LDAP_SETTINGS['team_attrs']['phonenumber']
+    teamname_attr = LDAP_SETTINGS['team_attrs']['name']
+    blacklist = LDAP_SETTINGS['member_blacklist']
+
     teams = {}
 
     # bind ldap
@@ -247,21 +247,21 @@ def fetch_additional_ldap_teams(users, team_type):
             team_dn = team['dn']
             rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
             for dn, ldap_dict in rdata:
-                ldap_team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, team['alias'])
+                ldap_team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumber_attr, teamname_attr, blacklist, team['alias'])
                 if ldap_team:
                     teams.update(ldap_team)
-
-    # for team_dn in LDAP_SETTINGS['team_additional_groups']:
-    #     rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
-    #     for dn, ldap_dict in rdata:
-    #         team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict)
-    #         if team:
-    #             teams.update(team)
+                else:
+                    logger.info('Additional Team %s has no members', team_dn)
 
     return teams
 
 
 def fetch_ldap_teams(users):
+    member_attr = LDAP_SETTINGS['team_attrs']['members']
+    phonenumber_attr = LDAP_SETTINGS['team_attrs']['phonenumber']
+    teamname_attr = LDAP_SETTINGS['team_attrs']['name']
+    blacklist = LDAP_SETTINGS['member_blacklist']
+
     teams = {}
 
     # bind ldap
@@ -280,9 +280,11 @@ def fetch_ldap_teams(users):
     logger.info('Loaded %d scrum team entries from ldap.', len(rdata))
 
     for dn, ldap_dict in rdata:
-        team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict)
+        team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumber_attr, teamname_attr, blacklist)
         if team:
             teams.update(team)
+        else:
+            logger.info('Team %s has no members', team_dn)
 
     return teams
 

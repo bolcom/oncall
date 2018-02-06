@@ -112,7 +112,7 @@ def test_ldap_sync_bol_generate_oncall_teams_itops_teams(team):
 
 
 @prefix('test_ldap_sync_bol_generate_oncall_teams_standby_teams')
-def test_ldap_sync_bol_generate_oncall_teams_itops_teams(team):
+def test_ldap_sync_bol_generate_oncall_teams_standby_teams(team):
     ldap_teams = { 'middleware':
                    {
                       'phonenumber': ['+3112341234'],
