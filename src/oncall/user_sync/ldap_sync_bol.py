@@ -284,7 +284,7 @@ def fetch_ldap_teams(users):
         if team:
             teams.update(team)
         else:
-            logger.info('Team %s has no members', team_dn)
+            logger.info('Team %s has no members', dn)
 
     return teams
 
