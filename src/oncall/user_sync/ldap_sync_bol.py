@@ -216,7 +216,8 @@ def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumb
             rdata = ldap_con.search_s(member, ldap.SCOPE_BASE, '(objectClass=*)', attrlist=['uid'])
             member_uids.append(rdata[0][1]['uid'][0])
         except ldap.NO_SUCH_OBJECT:
-            logger.info("Team %s has a non-existant member: %s", teamname, member)
+            pass
+            # logger.info("Team %s has a non-existant member: %s", teamname, member)
 
     teamphone = ldap_dict.get(phonenumber_attr)
     team[teamname] = {'members': member_uids, 'phonenumber': teamphone}
@@ -333,9 +334,10 @@ def get_team_name(engine, team_id):
 
 
 def get_user_id(engine, user):
+    query = ('SELECT `id`, `name` FROM `user` WHERE `name`="'+user+'"')
     try:
-        user_id = engine.execute('SELECT `id`, `name` FROM `user` WHERE `name`="'+user+'"').fetchone()['id']
-    except TypeError:
+        user_id = engine.execute(query).fetchone()['id']
+    except TypeError as err:
         return None
 
     return user_id
@@ -343,7 +345,7 @@ def get_user_id(engine, user):
 
 def get_user_name(engine, user_id):
     try:
-        user = engine.execute('SELECT `id`, `name` FROM `user` WHERE `id`=' + user_id + '').fetchone()['name']
+        user = engine.execute('SELECT `id`, `name` FROM `user` WHERE `id`=' + str(user_id)).fetchone()['name']
     except TypeError:
         logger.exception("Unable to get user for id %s", user_id)
         raise
@@ -445,30 +447,37 @@ def delete_roster_user(engine, team_id, user_id):
         raise
 
 
-def get_schedule(engine, team_id, roster_id, role_id):
+def get_schedule_ids(engine, team_id, roster_id, role_id):
+    schedule_ids = []
+    query = ('SELECT `id` FROM `schedule` WHERE (' +
+                                     'team_id=' + str(team_id) + ' AND ' +
+                                     'roster_id=' + str(roster_id) + ' AND ' +
+                                     'role_id=' + str(role_id) +
+                                     ')')
     try:
-        schedule_id = engine.execute('SELECT * FROM schedule WHERE ' +
-                                     'team_id=' + str(team_id) + ',' +
-                                     'roster_id=' + str(roster_id) + ',' +
-                                     'role_id=' + str(role_id) + ',' +
-                                     ')').lastrowid
+        res = engine.execute(query)
     except SQLAlchemyError as err:
         logger.warn("%s", err)
-        return False
-    return schedule_id
+        return schedule_ids
+
+    if res:
+        schedule_ids = [row[0] for row in res]
+
+    return schedule_ids
 
 
 def get_schedule_events(engine, schedule_id):
     events = []
     try:
-        res = engine.execute('SELECT * FROM schedule_events WHERE ' +
-                             'schedule_id=' + str(schedule_id) + ',' +
-                             ')')
+        res = engine.execute('SELECT `start`, `duration` FROM `schedule_event` WHERE ' +
+                             'schedule_id=' + str(schedule_id))
         for row in res:
             events.append({'start': row.start, 'duration': row.duration})
     except SQLAlchemyError as err:
-        logger.warn("%s", err)
-        return False
+        stats['sql_errors'] += 1
+        logger.exception('Failed to get schedule_events for id %s. %s', schedule_id, err)
+        raise
+
     return events
 
 
@@ -476,7 +485,7 @@ def insert_schedule(engine, team_id, roster_id, role_id,
                     auto_populate_threshold, advanced_mode, last_epoch_scheduled,
                     last_scheduled_user_id, scheduler_id):
     try:
-        schedule_id = engine.execute('INSERT INTO schedule VALUES(NULL, ' +
+        schedule_id = engine.execute('REPLACE INTO schedule VALUES(NULL, ' +
                                      str(team_id) + ',' +
                                      str(roster_id) + ',' +
                                      str(role_id) + ',' +
@@ -497,10 +506,10 @@ def insert_schedule(engine, team_id, roster_id, role_id,
 # special. will remove all schedules and schedule events for team_id
 def delete_team_schedules(engine, team_id):
     try:
-        res = engine.execute('SELECT `id` FROM schedule WHERE team_id='+str(team_id)+')')
+        res = engine.execute('SELECT `id` FROM schedule WHERE team_id='+str(team_id))
         for row in res:
-            engine.execute('DELETE FROM schedule_event WHERE schedule_id='+str(row.id)+')')
-        engine.execute('DELETE FROM schedule WHERE team_id='+str(team_id)+')')
+            engine.execute('DELETE FROM schedule_event WHERE schedule_id='+str(row.id))
+        engine.execute('DELETE FROM schedule WHERE team_id='+str(team_id))
     except SQLAlchemyError:
         stats['schedule_failed_to_remove'] += 1
         stats['sql_errors'] += 1
@@ -510,7 +519,7 @@ def delete_team_schedules(engine, team_id):
 
 def insert_schedule_event(engine, schedule_id, start, duration):
     try:
-        engine.execute('INSERT INTO schedule_event VALUES(NULL, ' +
+        engine.execute('REPLACE INTO schedule_event VALUES(NULL, ' +
                        str(schedule_id) + ',' +
                        str(start) + ',' +
                        str(duration) + ')')
@@ -604,6 +613,58 @@ def remove_teams(engine, teams):
         stats['teams_deactivated'] += 1
 
 
+def same_list_of_events(a, b):
+    retval = True
+    if len(a) != len(b):
+        logger.info("Schedule event count differs")
+        return False
+
+    for idx, val in enumerate(a):
+        if val['start'] != b[idx]['start']:
+            retval = False
+        if val['duration'] != b[idx]['duration']:
+            retval = False
+
+    return retval
+
+
+def valid_team_schedule_defaults(engine, team_id, roster_id, teamtype):
+    role_id = 1  # primary
+
+    default_24x7_events = [{'start': 86400, 'duration': 604800}]
+
+    default_workhours_events = [{'start': 115200, 'duration': 36000},
+                                {'start': 201600, 'duration': 36000},
+                                {'start': 288000, 'duration': 36000},
+                                {'start': 374400, 'duration': 36000},
+                                {'start': 460800, 'duration': 36000}]
+
+    default_standby_events = [{'start': 151200, 'duration': 50400},
+                              {'start': 237600, 'duration': 50400},
+                              {'start': 324000, 'duration': 50400},
+                              {'start': 410400, 'duration': 50400},
+                              {'start': 496800, 'duration': 223200}]
+
+    if teamtype == 'workhours':
+        default_events = default_workhours_events
+    elif teamtype == '24x7':
+        default_events = default_24x7_events
+    elif teamtype == 'standby':
+        default_events = default_standby_events
+
+    schedule_ids = get_schedule_ids(engine, team_id, roster_id, role_id)
+
+    if not schedule_ids:
+        return False
+
+    for schedule_id in schedule_ids:
+        events = get_schedule_events(engine, schedule_id)
+        if not same_list_of_events(default_events, events):
+            return False
+
+    return True
+
+
 def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
     auto_populate_threshold = 120
     advanced_mode = 1
@@ -669,15 +730,17 @@ def set_team_roster(engine, team_id):
     team = get_team_name(engine, team_id)
     roster_id = get_roster(engine, team + "-default")
     if not roster_id:
-        logger.info("Team %s missing default roster - inserting", get_team_name(engine, team_id))
-        team = get_team_name(engine, team_id)
-        dummy_user_id = get_user_id(engine, team)
+        logger.info("Team %s missing default roster - inserting", team)
+        bol_teamname = team.replace(immutable_team_suffix, '')
+        dummy_user_name = bol_teamname + '-user' + immutable_team_suffix
+        dummy_user_id = get_user_id(engine, dummy_user_name)
         if dummy_user_id:
             roster_id = insert_roster(engine, team + "-default", team_id)
             insert_roster_user(engine, roster_id, dummy_user_id, 1, 0)
             insert_team_user(engine, team_id, dummy_user_id)
         else:
             logger.info("Failed to get dummy team user id. Cannot set team roster for %s", team)
+    return roster_id
 
 
 # Immutable: team admins, dummy roster
@@ -685,7 +748,16 @@ def update_teams(engine, teams, ldap_teams):
     for team in teams:
         team_id = get_team_id(engine, team)
         set_team_admins(engine, team, ldap_teams[team]['members'])
-        set_team_roster(engine, team_id)
+
+        roster_id = set_team_roster(engine, team_id)
+        if not roster_id:
+            roster_id = insert_roster(engine, team + "-default", team_id)
+
+        team_type = get_team_type(team)
+        if not valid_team_schedule_defaults(engine, team_id, roster_id, team_type):
+            logger.info("Invalid team schedule found for %s", get_team_name(engine, team_id))
+            delete_team_schedules(engine, team_id)
+            insert_team_schedule_defaults(engine, team_id, roster_id, team_type)
 
 
 # use ldap teams to generate multiple oncall teams we want to manage
