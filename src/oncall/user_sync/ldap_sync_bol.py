@@ -810,12 +810,6 @@ def get_oncall_teamnames(engine):
     return oncall_teamnames
 
 
-def sync_teams(engine, ldap_teams, teams_to_insert, teams_to_update, inactive_teams):
-    add_teams(engine, teams_to_insert, ldap_teams)
-    remove_teams(engine, inactive_teams)
-    update_teams(engine, teams_to_update, ldap_teams)
-
-
 def insert_user(engine, username, ldap_user, modes):
     logger.debug('Inserting user %s', username)
 
@@ -1021,7 +1015,9 @@ def sync(config, engine):
     sync_users(engine, oncall_users, ldap_users, users_to_insert, users_to_update, users_to_purge, users_to_reactivate)
 
     # sync teams
-    sync_teams(engine, all_managed_teams, teams_to_insert, teams_to_update, inactive_teams)
+    add_teams(engine, teams_to_insert, ldap_teams)
+    remove_teams(engine, inactive_teams)
+    update_teams(engine, teams_to_update, ldap_teams)
 
 
 def metrics_sender():
