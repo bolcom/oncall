@@ -28,21 +28,31 @@ engine = create_engine(config['db']['conn']['str'] % config['db']['conn']['kwarg
 
 @prefix('test_ldap_sync_bol_create_team')
 def test_ldap_sync_bol_create_team(team):
-    ldap_teams = {
-                   'team1x-24x7-builtin':
-                   {
-                      'phonenumber': ['+3112341234'],
-                      'members': ['wleese', 'tvlieg']
-                   },
-                   'team2b-workhours-builtin':
-                   {
-                      'phonenumber': ['+3112341234'],
-                      'members': ['roverdijk', 'lvanroon']
-                   }
-                 }
-    teams_to_insert = set(['team1x-24x7-builtin', 'team2b-workhours-builtin'])
+    teams_to_insert = {
+        'team1x-24x7-builtin':
+            {
+                'phonenumber': ['+3112341234'],
+                'members': ['wleese', 'tvlieg'],
+                'type': 'scrumteam',
+                'bol_teamname': 'team1x',
+            },
+        'team2b-workhours-builtin':
+            {
+                'phonenumber': ['+3112341234'],
+                'members': ['roverdijk', 'lvanroon'],
+                'type': 'scrumteam',
+                'bol_teamname': 'team2b',
+            },
+         'team2b-businesshours-builtin':
+            {
+                'phonenumber': ['+3112341234'],
+                'members': ['roverdijk', 'lvanroon'],
+                'type': 'scrumteam',
+                'bol_teamname': 'team2b',
+            }
+    }
 
-    add_teams(engine, teams_to_insert, ldap_teams)
+    add_teams(engine, teams_to_insert)
 
     re = requests.get(api_v0('teams'))
     assert re.status_code == 200
@@ -59,19 +69,21 @@ def test_ldap_sync_bol_create_team(team):
 @prefix('test_ldap_sync_bol_generate_oncall_teams_scrum_teams')
 def test_ldap_sync_bol_generate_oncall_teams_scrum_teams(team):
     ldap_teams = {
-                   'team1x':
-                   {
-                      'phonenumber': ['+3112341234'],
-                      'members': ['wleese', 'tvlieg']
-                   }
-                 }
+        'team1x':
+            {
+                'phonenumber': ['+3112341234'],
+                'members': ['wleese', 'tvlieg'],
+                'type': 'scrumteam',
+                'bol_teamname': 'team1x',
+            }
+    }
 
-    team_type = 'scrumteam'
-    oncall_teams = generate_oncall_teams(ldap_teams, team_type)
+    oncall_teams = generate_oncall_teams(ldap_teams)
 
     assert isinstance(oncall_teams, dict)
     assert 'team1x-24x7-builtin' in oncall_teams
     assert 'team1x-workhours-builtin' in oncall_teams
+    assert 'team1x-businesshours-builtin' in oncall_teams
     assert 'team1x-standby-builtin' not in oncall_teams
 
     for team in oncall_teams:
@@ -82,23 +94,28 @@ def test_ldap_sync_bol_generate_oncall_teams_scrum_teams(team):
             assert oncall_teams[team]['members'] == ['wleese', 'tvlieg']
         elif team == 'team1x-workhours-builtin':
             assert oncall_teams[team]['members'] == ['wleese', 'tvlieg']
+        elif team == 'team1x-businesshours-builtin':
+            assert oncall_teams[team]['members'] == ['wleese', 'tvlieg']
 
 
 @prefix('test_ldap_sync_bol_generate_oncall_teams_itops_teams')
 def test_ldap_sync_bol_generate_oncall_teams_itops_teams(team):
-    ldap_teams = { 'srt-shopping':
-                   {
-                      'phonenumber': ['+3112341234'],
-                      'members': ['wleese', 'tvlieg']
-                   }
-                 }
+    ldap_teams = {
+        'srt-shopping':
+            {
+                'phonenumber': ['+3112341234'],
+                'members': ['wleese', 'tvlieg'],
+                'type': 'itops',
+                'bol_teamname': 'srt-shopping',
+            }
+    }
 
-    team_type = 'itops'
-    oncall_teams = generate_oncall_teams(ldap_teams, team_type)
+    oncall_teams = generate_oncall_teams(ldap_teams)
 
     assert isinstance(oncall_teams, dict)
     assert 'srt-shopping-24x7-builtin' in oncall_teams
     assert 'srt-shopping-workhours-builtin' in oncall_teams
+    assert 'srt-shopping-businesshours-builtin' in oncall_teams
     assert 'srt-shopping-standby-builtin' not in oncall_teams
 
     for team in oncall_teams:
@@ -113,20 +130,22 @@ def test_ldap_sync_bol_generate_oncall_teams_itops_teams(team):
 
 @prefix('test_ldap_sync_bol_generate_oncall_teams_standby_teams')
 def test_ldap_sync_bol_generate_oncall_teams_standby_teams(team):
-    ldap_teams = { 'middleware':
-                   {
-                      'phonenumber': ['+3112341234'],
-                      'members': ['wleese', 'tvlieg']
-                   }
-                 }
+    ldap_teams = {
+        'middleware':
+            {
+                'phonenumber': ['+3112341234'],
+                'members': ['wleese', 'tvlieg'],
+                'type': 'standby',
+            }
+    }
 
-    team_type = 'standby'
-    oncall_teams = generate_oncall_teams(ldap_teams, team_type)
+    oncall_teams = generate_oncall_teams(ldap_teams)
 
     assert isinstance(oncall_teams, dict)
     assert 'middleware-24x7-builtin' in oncall_teams
     assert 'middleware-standby-builtin' in oncall_teams
-    assert 'middleware-workhours-builtin' not in oncall_teams
+    assert 'middleware-workhours-builtin' in oncall_teams
+    assert 'middleware-businesshours-builtin' in oncall_teams
 
     for team in oncall_teams:
         assert 'members' in oncall_teams[team]
@@ -135,4 +154,6 @@ def test_ldap_sync_bol_generate_oncall_teams_standby_teams(team):
         if team == 'middleware-24x7-builtin':
             assert oncall_teams[team]['members'] == ['wleese', 'tvlieg']
         elif team == 'middleware-workhours-builtin':
+            assert oncall_teams[team]['members'] == ['wleese', 'tvlieg']
+        elif team == 'middleware-businesshours-builtin':
             assert oncall_teams[team]['members'] == ['wleese', 'tvlieg']

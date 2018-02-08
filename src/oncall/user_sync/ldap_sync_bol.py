@@ -225,7 +225,7 @@ def process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumb
     return team
 
 
-def fetch_additional_ldap_teams(users, team_type):
+def fetch_additional_ldap_teams(users):
     member_attr = LDAP_SETTINGS['team_attrs']['members']
     phonenumber_attr = LDAP_SETTINGS['team_attrs']['phonenumber']
     teamname_attr = LDAP_SETTINGS['team_attrs']['name']
@@ -242,22 +242,24 @@ def fetch_additional_ldap_teams(users, team_type):
     # query and process scrumteams
     query = LDAP_SETTINGS['team_query']
 
-    logger.info('Processing %s additional %s teams from ldap', len(LDAP_SETTINGS['team_additional_groups']), team_type)
+    logger.info('Processing %s additional teams from ldap', len(LDAP_SETTINGS['team_additional_groups']))
     for team in LDAP_SETTINGS['team_additional_groups']:
-        if team['type'] == team_type:
-            team_dn = team['dn']
-            rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
-            for dn, ldap_dict in rdata:
-                ldap_team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumber_attr, teamname_attr, blacklist, team['alias'])
-                if ldap_team:
-                    teams.update(ldap_team)
-                else:
-                    logger.info('Additional Team %s has no members', team_dn)
+        team_dn = team['dn']
+        rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
+        for dn, ldap_dict in rdata:
+            team_name = team['alias']
+            ldap_team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumber_attr, teamname_attr, blacklist, team_name)
+            if ldap_team:
+                ldap_team[team_name]['bol_teamname'] = team_name
+                ldap_team[team_name]['type'] = team['type']
+                teams.update(ldap_team)
+            else:
+                logger.info('Additional Team %s has no members', team_dn)
 
     return teams
 
 
-def fetch_ldap_teams(users):
+def fetch_ldap_scrumteams(users):
     member_attr = LDAP_SETTINGS['team_attrs']['members']
     phonenumber_attr = LDAP_SETTINGS['team_attrs']['phonenumber']
     teamname_attr = LDAP_SETTINGS['team_attrs']['name']
@@ -283,6 +285,9 @@ def fetch_ldap_teams(users):
     for dn, ldap_dict in rdata:
         team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumber_attr, teamname_attr, blacklist)
         if team:
+            team_name = team.keys()[0]
+            team[team_name]['bol_teamname'] = team_name
+            team[team_name]['type'] = 'scrumteam'
             teams.update(team)
         else:
             logger.info('Team %s has no members', dn)
@@ -400,7 +405,6 @@ def get_roster(engine, name):
         roster_id = engine.execute('SELECT `id`, `name` FROM roster WHERE name="'+name+'"').fetchone()['id']
     except SQLAlchemyError:
         logger.exception('Failed to find roster %s', name)
-        raise
     except TypeError:
         pass
     return roster_id
@@ -538,14 +542,17 @@ def get_team_type(team):
         teamtype = '24x7'
     elif team.endswith('-workhours' + immutable_team_suffix):
         teamtype = 'workhours'
+    elif team.endswith('-businesshours' + immutable_team_suffix):
+        teamtype = 'businesshours'
     else:
         logger.warn("Could not deduce team type by name for %s", team)
 
     return teamtype
 
 
-def get_fake_ldap_user(phonenumber, team):
-    bol_teamname = team.replace(immutable_team_suffix, "")
+def get_fake_ldap_user(teamname, team):
+    bol_teamname = team['bol_teamname']
+    phonenumber = team['phonenumber']
 
     email = bol_teamname + '@bol.com'
     if bol_teamname in SCRUMTEAMS:
@@ -554,21 +561,24 @@ def get_fake_ldap_user(phonenumber, team):
         if 'mobile_phone' in SCRUMTEAMS[bol_teamname]:
             phonenumber = SCRUMTEAMS[bol_teamname]['mobile_phone']
 
-    ldap_user = {'sms': phonenumber,
-                 'call': phonenumber,
-                 'email': email,
-                 'name': team}
+    ldap_user = {
+        'sms': phonenumber,
+        'call': phonenumber,
+        'email': email,
+        'name': teamname,
+    }
 
     return ldap_user
 
 
-def add_teams(engine, teams, ldap_teams):
+def add_teams(engine, teams):
     # Use replace here, to overwrite existing, but deactivated teams
     team_add_sql = 'REPLACE INTO `team` (`name`, `slack_channel`, `email`, `scheduling_timezone`, `active`, `iris_plan`, `iris_enabled`, `override_phone_number`) VALUES (%s, %s, %s, %s, 1, NULL, 0, NULL)'
 
     for team in teams:
         logger.info('Inserting team %s', team)
-        bol_teamname = team.replace(immutable_team_suffix, '')
+
+        bol_teamname = teams[team]['bol_teamname']
         try:
             team_id = engine.execute(team_add_sql, (team, "#" + bol_teamname, bol_teamname + "@bol.com", "Europe/Amsterdam")).lastrowid
         except SQLAlchemyError:
@@ -578,13 +588,16 @@ def add_teams(engine, teams, ldap_teams):
             continue
         stats['teams_added'] += 1
 
-        set_team_admins(engine, team, ldap_teams[team]['members'])
-
         # add dummy user for team, to set up default roster and schedule
-        dummy_ldap_user = get_fake_ldap_user(ldap_teams[team]['phonenumber'], team)
-        dummy_user_name = bol_teamname + '-user' + immutable_team_suffix
+        dummy_user_name = team
+        dummy_ldap_user = get_fake_ldap_user(dummy_user_name, teams[team])
         dummy_user_id = insert_user(engine, dummy_user_name, dummy_ldap_user, modes)
+        if not dummy_user_id:
+            logger.info("Failed to insert dummy user: %s", dummy_user_name)
+            logger.info("Skipping setup of team %s", team)
+            continue
         insert_team_user(engine, team_id, dummy_user_id)
+        set_team_admins(engine, team, teams[team]['members'])
 
         # add default roster, roster user and schedule
         roster_id = insert_roster(engine, team + "-default", team_id)
@@ -628,7 +641,7 @@ def same_list_of_events(a, b):
     return retval
 
 
-def valid_team_schedule_defaults(engine, team_id, roster_id, teamtype):
+def valid_team_schedule_defaults(engine, team_id, teamtype):
     role_id = 1  # primary
 
     default_24x7_events = [{'start': 86400, 'duration': 604800}]
@@ -638,6 +651,14 @@ def valid_team_schedule_defaults(engine, team_id, roster_id, teamtype):
                                 {'start': 288000, 'duration': 36000},
                                 {'start': 374400, 'duration': 36000},
                                 {'start': 460800, 'duration': 36000}]
+
+    default_businesshours_events = [{'start': 28800, 'duration': 59400},
+                                    {'start': 115200, 'duration': 59400},
+                                    {'start': 201600, 'duration': 59400},
+                                    {'start': 288000, 'duration': 59400},
+                                    {'start': 374400, 'duration': 59400},
+                                    {'start': 460800, 'duration': 59400},
+                                    {'start': 547200, 'duration': 59400}]
 
     default_standby_events = [{'start': 151200, 'duration': 50400},
                               {'start': 237600, 'duration': 50400},
@@ -651,18 +672,24 @@ def valid_team_schedule_defaults(engine, team_id, roster_id, teamtype):
         default_events = default_24x7_events
     elif teamtype == 'standby':
         default_events = default_standby_events
+    elif teamtype == 'businesshours':
+        default_events = default_businesshours_events
 
-    schedule_ids = get_schedule_ids(engine, team_id, roster_id, role_id)
+    retval = False
+    all_roster_ids = get_team_roster_ids(engine, team_id)
+    for roster_id in all_roster_ids:
+        schedule_ids = get_schedule_ids(engine, team_id, roster_id, role_id)
 
-    if not schedule_ids:
-        return False
+        if not schedule_ids:
+            continue
 
-    for schedule_id in schedule_ids:
-        events = get_schedule_events(engine, schedule_id)
-        if not same_list_of_events(default_events, events):
-            return False
+        for schedule_id in schedule_ids:
+            events = get_schedule_events(engine, schedule_id)
+            if same_list_of_events(default_events, events):
+                retval = True
+                break
 
-    return True
+    return retval
 
 
 def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
@@ -681,6 +708,25 @@ def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
                 "288000",
                 "374400",
                 "460800",
+                ]
+
+        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
+                                      auto_populate_threshold, advanced_mode,
+                                      last_epoch_scheduled, last_scheduled_user_id,
+                                      scheduler_id)
+
+        for start_offset in default_schedule_event_start_offsets:
+            insert_schedule_event(engine, schedule_id, start_offset, duration)
+    if teamtype == 'businesshours':
+        duration = "59400"  # 16,5 hours in seconds
+        default_schedule_event_start_offsets = [
+                "28800",
+                "115200",
+                "201600",
+                "288000",
+                "374400",
+                "460800",
+                "547200",
                 ]
 
         schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
@@ -726,64 +772,69 @@ def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
             insert_schedule_event(engine, schedule_id, start_offset, friday_till_monday_duration)
 
 
-def set_team_roster(engine, team_id):
+def get_team_roster(engine, team_id):
     team = get_team_name(engine, team_id)
     roster_id = get_roster(engine, team + "-default")
-    if not roster_id:
-        logger.info("Team %s missing default roster - inserting", team)
-        bol_teamname = team.replace(immutable_team_suffix, '')
-        dummy_user_name = bol_teamname + '-user' + immutable_team_suffix
-        dummy_user_id = get_user_id(engine, dummy_user_name)
-        if dummy_user_id:
-            roster_id = insert_roster(engine, team + "-default", team_id)
-            insert_roster_user(engine, roster_id, dummy_user_id, 1, 0)
-            insert_team_user(engine, team_id, dummy_user_id)
-        else:
-            logger.info("Failed to get dummy team user id. Cannot set team roster for %s", team)
+
     return roster_id
 
 
+def get_team_roster_ids(engine, team_id):
+    roster_ids = []
+    query = ('SELECT `id` FROM `roster` WHERE team_id=' + str(team_id))
+
+    try:
+        res = engine.execute(query)
+    except SQLAlchemyError as err:
+        logger.warn("%s", err)
+        return roster_ids
+
+    if res:
+        roster_ids = [row[0] for row in res]
+
+    return roster_ids
+
+
 # Immutable: team admins, dummy roster
-def update_teams(engine, teams, ldap_teams):
+def update_teams(engine, teams):
     for team in teams:
         team_id = get_team_id(engine, team)
-        set_team_admins(engine, team, ldap_teams[team]['members'])
+        set_team_admins(engine, team, teams[team]['members'])
 
-        roster_id = set_team_roster(engine, team_id)
-        if not roster_id:
+        dummy_user_name = team
+        dummy_user_id = get_user_id(engine, dummy_user_name)
+        if not dummy_user_id:
+            logger.info("Failed to get dummy team user id. Cannot set team roster for %s", team)
+            continue
+
+        default_roster_id = get_team_roster(engine, team_id)
+        if not default_roster_id:
+            logger.info("Team %s missing default roster - inserting", team)
             roster_id = insert_roster(engine, team + "-default", team_id)
+            insert_roster_user(engine, roster_id, dummy_user_id, 1, 0)
+            insert_team_user(engine, team_id, dummy_user_id)
 
         team_type = get_team_type(team)
-        if not valid_team_schedule_defaults(engine, team_id, roster_id, team_type):
+        if not valid_team_schedule_defaults(engine, team_id, team_type):
             logger.info("Invalid team schedule found for %s", get_team_name(engine, team_id))
             delete_team_schedules(engine, team_id)
-            insert_team_schedule_defaults(engine, team_id, roster_id, team_type)
+            insert_team_schedule_defaults(engine, team_id, default_roster_id, team_type)
 
 
 # use ldap teams to generate multiple oncall teams we want to manage
-def generate_oncall_teams(ldap_teams, team_type):
+def generate_oncall_teams(ldap_teams):
     teams = {}
     for team in ldap_teams:
-        # allow team aliasing
-        if 'alias' in ldap_teams[team]:
-            team = ldap_teams[team]['alias']
-
-        # Convenient team names
         team_24x7 = team + '-24x7' + immutable_team_suffix
         team_workhours = team + '-workhours' + immutable_team_suffix
-        team_standby = team + '-standby' + immutable_team_suffix
-
-        if team_type == 'scrumteam':
-            teams[team_24x7] = ldap_teams[team]
-            teams[team_workhours] = ldap_teams[team]
-        elif team_type == 'itops':
-            teams[team_24x7] = ldap_teams[team]
-            teams[team_workhours] = ldap_teams[team]
-        elif team_type == 'standby':
-            teams[team_24x7] = ldap_teams[team]
+        team_businesshours = team + '-businesshours' + immutable_team_suffix
+        if ldap_teams[team]['type'] == 'standby':
+            team_standby = team + '-standby' + immutable_team_suffix
             teams[team_standby] = ldap_teams[team]
-        else:
-            logger.error("When generating oncall team for %s: received invalid team type: %s", team, team_type)
+
+        teams[team_24x7] = ldap_teams[team]
+        teams[team_workhours] = ldap_teams[team]
+        teams[team_businesshours] = ldap_teams[team]
 
     return teams
 
@@ -828,7 +879,7 @@ def insert_user(engine, username, ldap_user, modes):
         stats['users_failed_to_add'] += 1
         stats['sql_errors'] += 1
         logger.exception('Failed to add user %s' % username)
-        return
+        raise
 
     stats['users_added'] += 1
 
@@ -868,7 +919,9 @@ def sync_users(engine, oncall_users, ldap_users, users_to_insert, users_to_updat
 
     # insert users that need to be
     for username in users_to_insert:
-        insert_user(engine, username, ldap_users[username], modes)
+        res = insert_user(engine, username, ldap_users[username], modes)
+        if not res:
+            logger.info("Failed to insert user: %s", username)
 
     # update users that need to be
     name_update_sql = 'UPDATE user SET full_name = %s WHERE name = %s'
@@ -973,39 +1026,37 @@ def sync(config, engine):
 
     ### Teams
     # teamnames from oncall
-    oncall_teamnames = get_oncall_teamnames(engine)
+    existing_oncall_teamnames = get_oncall_teamnames(engine)
 
     # teams from ldap
-    ldap_teams = fetch_ldap_teams(ldap_users)
-    additional_itops_ldap_teams = fetch_additional_ldap_teams(ldap_users, 'itops')
-    additional_standby_ldap_teams = fetch_additional_ldap_teams(ldap_users, 'standby')
+    ldap_teams = fetch_ldap_scrumteams(ldap_users)
+    additional_ldap_teams = fetch_additional_ldap_teams(ldap_users)
+    all_ldap_teams = ldap_teams.copy()
+    all_ldap_teams.update(additional_ldap_teams)
 
-    # get all teams we want to manage
-    managed_scrumteams = generate_oncall_teams(ldap_teams, 'scrumteam')
-    managed_itops = generate_oncall_teams(additional_itops_ldap_teams, 'itops')
-    managed_standby = generate_oncall_teams(additional_standby_ldap_teams, 'standby')
-
-    # merge all managed teams
-    all_managed_teams = managed_scrumteams.copy()
-    all_managed_teams.update(managed_itops)
-    all_managed_teams.update(managed_standby)
-    all_managed_teamnames = set(all_managed_teams)
+    # copy the ldap teams into multiple variants with different names
+    # to support our team1x -> multiple oncall team approach to time
+    # management in oncall
+    managed_oncall_teams = generate_oncall_teams(all_ldap_teams)
+    managed_oncall_teamnames = set(managed_oncall_teams)
 
     # set of ldap teams not in oncall
-    teams_to_insert = all_managed_teamnames - oncall_teamnames
+    teamnames_to_insert = managed_oncall_teamnames - existing_oncall_teamnames
+    teams_to_insert = dict((k, managed_oncall_teams[k]) for k in teamnames_to_insert)
     # set of existing oncall teams that are in ldap
-    teams_to_update = oncall_teamnames & all_managed_teamnames
+    teamnames_to_update = existing_oncall_teamnames & managed_oncall_teamnames
+    teams_to_update = dict((k, managed_oncall_teams[k]) for k in teamnames_to_update)
     # set of teams in oncall but not ldap, assumed to be inactive
-    inactive_teams = oncall_teamnames - all_managed_teamnames
+    inactive_teamnames = existing_oncall_teamnames - managed_oncall_teamnames
 
     ### Report
     logger.info("Users to insert: %s", list(users_to_insert))
     logger.info("Users to check for updating: %s", len(users_to_update))
     logger.info("Users to purge: %s", list(users_to_purge))
     logger.info("Users to reactivate: %s", list(users_to_reactivate))
-    logger.info("Teams to insert: %s", list(teams_to_insert))
-    logger.info("Teams to check for updating: %s", len(teams_to_update))
-    logger.info("Teams to purge: %s", list(inactive_teams))
+    logger.info("Teams to insert: %s", list(teamnames_to_insert))
+    logger.info("Teams to check for updating: %s", len(teamnames_to_update))
+    logger.info("Teams to purge: %s", list(inactive_teamnames))
 
     if NOOP:
         logger.info("No Op mode enabled. No changes made.")
@@ -1015,9 +1066,9 @@ def sync(config, engine):
     sync_users(engine, oncall_users, ldap_users, users_to_insert, users_to_update, users_to_purge, users_to_reactivate)
 
     # sync teams
-    add_teams(engine, teams_to_insert, ldap_teams)
-    remove_teams(engine, inactive_teams)
-    update_teams(engine, teams_to_update, ldap_teams)
+    add_teams(engine, teams_to_insert)
+    remove_teams(engine, inactive_teamnames)
+    update_teams(engine, teams_to_update)
 
 
 def metrics_sender():
