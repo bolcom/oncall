@@ -68,6 +68,7 @@ modes = {}
 
 LDAP_SETTINGS = {}
 SCRUMTEAMS = {}
+ITOPSTEAMS = {}
 NOOP = False
 
 
@@ -242,16 +243,16 @@ def fetch_additional_ldap_teams(users):
     # query and process scrumteams
     query = LDAP_SETTINGS['team_query']
 
-    logger.info('Processing %s additional teams from ldap', len(LDAP_SETTINGS['team_additional_groups']))
-    for team in LDAP_SETTINGS['team_additional_groups']:
-        team_dn = team['dn']
+    logger.info('Processing %s additional teams from ldap', len(ITOPSTEAMS))
+    for team in ITOPSTEAMS.keys():
+        team_dn = ITOPSTEAMS[team]['dn']
         rdata = ldap_con.search_s(team_dn, ldap.SCOPE_BASE, query)
         for dn, ldap_dict in rdata:
-            team_name = team['alias']
+            team_name = ITOPSTEAMS[team]['alias']
             ldap_team = process_ldap_team_gon(users, dn, ldap_con, ldap_dict, member_attr, phonenumber_attr, teamname_attr, blacklist, team_name)
             if ldap_team:
                 ldap_team[team_name]['bol_teamname'] = team_name
-                ldap_team[team_name]['type'] = team['type']
+                ldap_team[team_name]['type'] = ITOPSTEAMS[team]['type']
                 teams.update(ldap_team)
             else:
                 logger.info('Additional Team %s has no members', team_dn)
@@ -535,9 +536,10 @@ def insert_schedule_event(engine, schedule_id, start, duration):
 
 
 def get_team_type(team):
-    teamtype = '24x7'
     if team.endswith('-standby' + immutable_team_suffix):
         teamtype = 'standby'
+    elif team.endswith('-standbybusinesshours' + immutable_team_suffix):
+        teamtype = 'standbybusinesshours'
     elif team.endswith('-24x7' + immutable_team_suffix):
         teamtype = '24x7'
     elif team.endswith('-workhours' + immutable_team_suffix):
@@ -545,7 +547,8 @@ def get_team_type(team):
     elif team.endswith('-businesshours' + immutable_team_suffix):
         teamtype = 'businesshours'
     else:
-        logger.warn("Could not deduce team type by name for %s", team)
+        logger.error("Could not deduce team type by name for '%s'", team)
+        sys.exit(1)
 
     return teamtype
 
@@ -577,7 +580,6 @@ def add_teams(engine, teams):
 
     for team in teams:
         logger.info('Inserting team %s', team)
-
         bol_teamname = teams[team]['bol_teamname']
         try:
             team_id = engine.execute(team_add_sql, (team, "#" + bol_teamname, bol_teamname + "@bol.com", "Europe/Amsterdam")).lastrowid
@@ -666,14 +668,28 @@ def valid_team_schedule_defaults(engine, team_id, teamtype):
                               {'start': 410400, 'duration': 50400},
                               {'start': 496800, 'duration': 223200}]
 
+    default_standbybusinesshours_events = [
+                                    {'start': 64800, 'duration': 23400},
+                                    {'start': 151200, 'duration': 23400},
+                                    {'start': 237600, 'duration': 23400},
+                                    {'start': 324000, 'duration': 23400},
+                                    {'start': 410400, 'duration': 23400},
+                                    {'start': 496800, 'duration': 23400},
+                                    {'start': 583200, 'duration': 23400}]
+
     if teamtype == 'workhours':
         default_events = default_workhours_events
     elif teamtype == '24x7':
         default_events = default_24x7_events
     elif teamtype == 'standby':
         default_events = default_standby_events
+    elif teamtype == 'standbybusinesshours':
+        default_events = default_standbybusinesshours_events
     elif teamtype == 'businesshours':
         default_events = default_businesshours_events
+    else:
+        logger.error("Unknown teamtype %s for %s", teamtype, get_team_name(engine, team_id))
+        sys.exit(1)
 
     retval = False
     all_roster_ids = get_team_roster_ids(engine, team_id)
@@ -693,7 +709,7 @@ def valid_team_schedule_defaults(engine, team_id, teamtype):
 
 
 def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
-    auto_populate_threshold = 120
+    auto_populate_threshold = 90
     advanced_mode = 1
     last_epoch_scheduled = "NULL"
     last_scheduled_user_id = "NULL"
@@ -703,68 +719,55 @@ def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
     if teamtype == 'workhours':
         duration = "36000"  # 10 hours in seconds
         default_schedule_event_start_offsets = [
-                "115200",
-                "201600",
-                "288000",
-                "374400",
-                "460800",
-                ]
-
-        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
-                                      auto_populate_threshold, advanced_mode,
-                                      last_epoch_scheduled, last_scheduled_user_id,
-                                      scheduler_id)
-
-        for start_offset in default_schedule_event_start_offsets:
-            insert_schedule_event(engine, schedule_id, start_offset, duration)
-    if teamtype == 'businesshours':
+            "115200",
+            "201600",
+            "288000",
+            "374400",
+            "460800"]
+    elif teamtype == 'businesshours':
         duration = "59400"  # 16,5 hours in seconds
         default_schedule_event_start_offsets = [
-                "28800",
-                "115200",
-                "201600",
-                "288000",
-                "374400",
-                "460800",
-                "547200",
-                ]
-
-        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
-                                      auto_populate_threshold, advanced_mode,
-                                      last_epoch_scheduled, last_scheduled_user_id,
-                                      scheduler_id)
-
-        for start_offset in default_schedule_event_start_offsets:
-            insert_schedule_event(engine, schedule_id, start_offset, duration)
+            "28800",
+            "115200",
+            "201600",
+            "288000",
+            "374400",
+            "460800",
+            "547200"]
     elif teamtype == '24x7':
         duration = "604800"  # 7 days in seconds
-        schedule_event_offsets = ["86400"]
-
-        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
-                                      auto_populate_threshold, advanced_mode,
-                                      last_epoch_scheduled, last_scheduled_user_id,
-                                      scheduler_id)
-
-        for start_offset in schedule_event_offsets:
-            insert_schedule_event(engine, schedule_id, start_offset, duration)
-
+        default_schedule_event_start_offsets = ["86400"]
     elif teamtype == 'standby':
         duration = "50400"  # 14 hours in seconds
-        schedule_event_offsets = [
-                "151200",
-                "237600",
-                "324000",
-                "410400",
-                ]
+        default_schedule_event_start_offsets = [
+            "151200",
+            "237600",
+            "324000",
+            "410400"]
+    elif teamtype == 'standbybusinesshours':
+        duration = "23400"
+        default_schedule_event_start_offsets = [
+            "64800",
+            "151200",
+            "237600",
+            "324000",
+            "410400",
+            "496800",
+            "583200"]
+    else:
+        logger.error("Unknown teamtype %s for %s", teamtype, get_team_name(engine, team_id))
+        sys.exit(1)
 
-        schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
-                                      auto_populate_threshold, advanced_mode,
-                                      last_epoch_scheduled, last_scheduled_user_id,
-                                      scheduler_id)
+    schedule_id = insert_schedule(engine, team_id, roster_id, role_id,
+                                  auto_populate_threshold, advanced_mode,
+                                  last_epoch_scheduled, last_scheduled_user_id,
+                                  scheduler_id)
 
-        for start_offset in schedule_event_offsets:
-            insert_schedule_event(engine, schedule_id, start_offset, duration)
+    for start_offset in default_schedule_event_start_offsets:
+        insert_schedule_event(engine, schedule_id, start_offset, duration)
 
+    # snowflake.
+    if teamtype == 'standby':
         friday_till_monday_duration = "223200"  # friday 18:00 to monday 08:00
         weekend_schedule_event_start_offsets = ['496800']
 
@@ -825,16 +828,19 @@ def update_teams(engine, teams):
 def generate_oncall_teams(ldap_teams):
     teams = {}
     for team in ldap_teams:
-        team_24x7 = team + '-24x7' + immutable_team_suffix
-        team_workhours = team + '-workhours' + immutable_team_suffix
-        team_businesshours = team + '-businesshours' + immutable_team_suffix
-        if ldap_teams[team]['type'] == 'standby':
-            team_standby = team + '-standby' + immutable_team_suffix
-            teams[team_standby] = ldap_teams[team]
+        if team in SCRUMTEAMS or team in ITOPSTEAMS:
+            team_24x7 = team + '-24x7' + immutable_team_suffix
+            team_workhours = team + '-workhours' + immutable_team_suffix
+            team_businesshours = team + '-businesshours' + immutable_team_suffix
+            if ldap_teams[team]['type'] == 'standby':
+                team_standby = team + '-standby' + immutable_team_suffix
+                teams[team_standby] = ldap_teams[team]
+                team_standbybusinesshours = team + '-standbybusinesshours' + immutable_team_suffix
+                teams[team_standbybusinesshours] = ldap_teams[team]
 
-        teams[team_24x7] = ldap_teams[team]
-        teams[team_workhours] = ldap_teams[team]
-        teams[team_businesshours] = ldap_teams[team]
+            teams[team_24x7] = ldap_teams[team]
+            teams[team_workhours] = ldap_teams[team]
+            teams[team_businesshours] = ldap_teams[team]
 
     return teams
 
@@ -1081,6 +1087,7 @@ def main(config):
     global NOOP
     global LDAP_SETTINGS
     global SCRUMTEAMS
+    global ITOPSTEAMS
 
     if len(sys.argv) == 3 and sys.argv[2] == '--noop':
         NOOP = True
@@ -1089,12 +1096,14 @@ def main(config):
 
     LDAP_SETTINGS = config['ldap_sync']
     teamsfile = config['ldap_sync']['scrumteams_file']
-
     with open(teamsfile, 'r') as stream:
         try:
-            SCRUMTEAMS = yaml.load(stream)
+            SCRUMTEAMS = yaml.load(stream)['bol_scrum_teams']
         except yaml.YAMLError as err:
             logger.info(err)
+
+    for team in LDAP_SETTINGS['team_additional_groups']:
+        ITOPSTEAMS[team['alias']] = team
 
     metrics.init(config, 'oncall-ldap-user-sync', stats)
     spawn(metrics_sender)
