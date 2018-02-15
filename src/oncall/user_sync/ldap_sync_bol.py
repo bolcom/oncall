@@ -1098,7 +1098,7 @@ def main(config):
     teamsfile = config['ldap_sync']['scrumteams_file']
     with open(teamsfile, 'r') as stream:
         try:
-            SCRUMTEAMS = yaml.load(stream)['bol_scrum_teams']
+            SCRUMTEAMS = yaml.load(stream)
         except yaml.YAMLError as err:
             logger.info(err)
 

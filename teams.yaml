@@ -1,0 +1,48 @@
+---
+teamce:
+  space: retail
+  motm_phase: '2'
+  mobile_phone: 0800-changeme
+  email_address: tce@bol.com
+teamosi:
+  space: retail
+  motm_phase: '2'
+  mobile_phone: 0800-changeme
+  email_address: ti@bol.com
+teamaxle:
+  space: shopping
+  motm_phase: '2'
+  mobile_phone: 0800-changeme
+  email_address: te@bol.com
+teammirage:
+  space: shopping
+  motm_phase: '2'
+  mobile_phone: "+231421343"
+  email_address: a123@bol.com
+  hipchat_room: testroom
+team1b:
+  space: retail
+  motm_phase: '2'
+  mobile_phone: "+1234213432"
+team1c:
+  space: retail
+  motm_phase: '2'
+  mobile_phone: "+213234"
+  hipchat_room: 24056
+team1d:
+  space: retail
+  motm_phase: '2'
+  mobile_phone: "+213234"
+team1e:
+  space: retail
+  motm_phase: '2'
+  mobile_phone: "+213234"
+team1j:
+  space: retail
+  motm_phase: '6'
+  mobile_phone: "+1234523423"
+team1p:
+  space: retail
+  motm_phase: '2'
+  mobile_phone: "+1234234"
+  hipchat_room: T1P
