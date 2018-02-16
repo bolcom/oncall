@@ -709,7 +709,7 @@ def valid_team_schedule_defaults(engine, team_id, teamtype):
 
 
 def insert_team_schedule_defaults(engine, team_id, roster_id, teamtype):
-    auto_populate_threshold = 90
+    auto_populate_threshold = 7
     advanced_mode = 1
     last_epoch_scheduled = "NULL"
     last_scheduled_user_id = "NULL"
